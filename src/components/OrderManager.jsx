@@ -587,11 +587,27 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
         noCell.font = { name: '맑은 고딕', size: 12, bold: true };
         noCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        // 이미지 (B 컬럼)
+        // 이미지 (B 컬럼) - URL 또는 base64 모두 처리
         if (item.photo) {
           try {
-            const base64 = item.photo.split(',')[1];
-            const ext = item.photo.includes('image/png') ? 'png' : 'jpeg';
+            let base64, ext;
+            if (item.photo.startsWith('data:')) {
+              // base64 형식
+              base64 = item.photo.split(',')[1];
+              ext = item.photo.includes('image/png') ? 'png' : 'jpeg';
+            } else {
+              // URL 형식 - fetch해서 base64로 변환
+              const response = await fetch(item.photo);
+              const blob = await response.blob();
+              const arrayBuffer = await blob.arrayBuffer();
+              const bytes = new Uint8Array(arrayBuffer);
+              let binary = '';
+              for (let j = 0; j < bytes.byteLength; j++) {
+                binary += String.fromCharCode(bytes[j]);
+              }
+              base64 = btoa(binary);
+              ext = blob.type.includes('png') ? 'png' : 'jpeg';
+            }
             const imageId = wb.addImage({ base64, extension: ext });
             ws.addImage(imageId, {
               tl: { col: 1.1, row: row - 1 + 0.1 },
