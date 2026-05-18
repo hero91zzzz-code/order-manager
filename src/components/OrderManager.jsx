@@ -706,6 +706,7 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
             <div className="th-no">번호</div>
             <div className="th-image">이미지</div>
             <div className="th-info">품목</div>
+            <div className="th-qty">수량</div>
             <div className="th-price">단가</div>
             <div className="th-notes">비고</div>
           </div>
@@ -723,29 +724,14 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
                   )}
                 </div>
 
-                {/* 품목 정보 (품목명 + 수량 + 기한 + 상태 토글) */}
+                {/* 품목 정보 (품목명 + 기한 + 상태 토글) */}
                 <div className="td-info">
                   <div className="item-content">{item.content}</div>
-
-                  {/* 수량 (인라인 편집) */}
-                  <InlineField
-                    label="수량"
-                    value={item.quantity}
-                    placeholder={authMode === 'edit' ? '+ 수량 추가' : '—'}
-                    editable={authMode === 'edit'}
-                    isEditing={isEditing(idx, 'quantity')}
-                    draft={draft}
-                    onStartEdit={() => startEdit(idx, 'quantity')}
-                    onChangeDraft={setDraft}
-                    onSave={saveEdit}
-                    onCancel={cancelEdit}
-                    multiline={false}
-                  />
 
                   <div className="item-meta-row">
                     {item.deadline && (
                       <span className={`item-deadline ${daysLeft !== null && item.status !== 'done' ? (daysLeft < 0 ? 'overdue' : daysLeft <= 3 ? 'soon' : '') : ''}`}>
-                        <Clock size={11} /> {item.deadline}
+                        <Clock size={14} /> {item.deadline}
                         {daysLeft !== null && item.status !== 'done' && (
                           <span className="dday">
                             {daysLeft < 0 ? `${Math.abs(daysLeft)}일↑` : daysLeft === 0 ? '오늘' : `D-${daysLeft}`}
@@ -758,9 +744,26 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
                       onClick={() => onToggleItemStatus(idx)}
                       disabled={authMode !== 'edit'}
                     >
-                      {item.status === 'done' ? <><CheckCircle2 size={12} /> 완료</> : <><Circle size={12} /> 진행중</>}
+                      {item.status === 'done' ? <><CheckCircle2 size={14} /> 완료</> : <><Circle size={14} /> 진행중</>}
                     </button>
                   </div>
+                </div>
+
+                {/* 수량 (인라인 편집) */}
+                <div className="td-qty">
+                  <InlineField
+                    value={item.quantity}
+                    placeholder={authMode === 'edit' ? '+ 수량' : '—'}
+                    editable={authMode === 'edit'}
+                    isEditing={isEditing(idx, 'quantity')}
+                    draft={draft}
+                    onStartEdit={() => startEdit(idx, 'quantity')}
+                    onChangeDraft={setDraft}
+                    onSave={saveEdit}
+                    onCancel={cancelEdit}
+                    multiline={false}
+                    cellStyle="qty"
+                  />
                 </div>
 
                 {/* 단가 (인라인 편집) */}
@@ -1265,16 +1268,16 @@ const styles = `
     white-space: pre-wrap; line-height: 1.5; font-weight: 500; text-align: center; }
 
   .items-table { background: #fff; border: 1.5px solid #1a1a1a; border-radius: 6px; overflow: hidden; }
-  .items-header { display: grid; grid-template-columns: 36px 1fr 140px 100px 160px;
+  .items-header { display: grid; grid-template-columns: 36px 1fr 90px 110px 100px 160px;
     background: #1a1a1a; color: #fff; font-size: 12px; font-weight: 700; }
-  .th-no, .th-image, .th-info, .th-price, .th-notes {
+  .th-no, .th-image, .th-info, .th-qty, .th-price, .th-notes {
     padding: 9px 8px; text-align: center; border-right: 1px solid rgba(255,255,255,0.15); }
   .th-notes { border-right: none; }
-  .item-row { display: grid; grid-template-columns: 36px 1fr 140px 100px 160px;
+  .item-row { display: grid; grid-template-columns: 36px 1fr 90px 110px 100px 160px;
     border-top: 1px solid #1a1a1a; min-height: 320px; }
   .item-row:first-of-type { border-top: none; }
   .item-row.done { background: #fafaf7; opacity: 0.7; }
-  .td-no, .td-image, .td-info, .td-price, .td-notes {
+  .td-no, .td-image, .td-info, .td-qty, .td-price, .td-notes {
     padding: 10px 8px; border-right: 1px solid #1a1a1a; }
   .td-notes { border-right: none; }
   .td-no { display: flex; align-items: center; justify-content: center;
@@ -1325,26 +1328,32 @@ const styles = `
   .inline-cancel:hover { background: #f5f4ee; }
   .inline-save { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
   .inline-save:hover { opacity: 0.9; }
-  .td-info { display: flex; flex-direction: column; gap: 4px; }
-  .item-content { font-size: 14px; font-weight: 600; line-height: 1.35; color: #1a1a1a; }
-  .item-quantity { font-size: 13px; color: #333; }
-  .qty-label { font-size: 10px; color: #888; font-weight: 700; letter-spacing: 0.04em; margin-right: 4px; }
-  .item-notes { font-size: 12.5px; color: #c93030; line-height: 1.4; white-space: pre-wrap; }
-  .item-meta-row { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; flex-wrap: wrap; }
-  .item-deadline { display: inline-flex; align-items: center; gap: 3px;
-    font-size: 11px; color: #666; }
-  .item-deadline.soon { color: #a05a0a; font-weight: 600; }
-  .item-deadline.overdue { color: #a82820; font-weight: 600; }
-  .item-deadline .dday { margin-left: 3px; padding: 1px 5px; border-radius: 3px;
-    background: #ebe9e0; font-weight: 700; font-size: 10px; }
+  .td-info { display: flex; flex-direction: column; gap: 6px; }
+  .item-content { font-size: 15.5px; font-weight: 700; line-height: 1.35; color: #1a1a1a;
+    padding: 4px 0 8px; }
+  .item-notes { font-size: 13px; color: #c93030; line-height: 1.4; white-space: pre-wrap; }
+  .item-meta-row { display: flex; flex-direction: column; align-items: flex-start;
+    gap: 8px; margin-top: auto; padding-top: 6px; }
+  .item-deadline { display: inline-flex; align-items: center; gap: 5px;
+    font-size: 14px; color: #555; font-weight: 600; }
+  .item-deadline.soon { color: #a05a0a; }
+  .item-deadline.overdue { color: #a82820; }
+  .item-deadline .dday { margin-left: 4px; padding: 3px 8px; border-radius: 5px;
+    background: #ebe9e0; font-weight: 700; font-size: 12px; }
   .item-deadline.soon .dday { background: #fef0d8; color: #a05a0a; }
   .item-deadline.overdue .dday { background: #fbe3e0; color: #a82820; }
-  .item-status-toggle { display: inline-flex; align-items: center; gap: 3px;
-    font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 4px;
+  .item-status-toggle { display: inline-flex; align-items: center; gap: 5px;
+    font-size: 13px; font-weight: 700; padding: 7px 14px; border-radius: 7px;
     border: none; cursor: pointer; font-family: inherit; letter-spacing: 0.03em; }
   .item-status-toggle.progress { background: #f0ebd8; color: #8b6914; }
   .item-status-toggle.done { background: #e8f0e8; color: #4a7048; }
   .item-status-toggle:disabled { cursor: default; }
+
+  /* 수량 셀 - 가운데 정렬, 큰 글씨 */
+  .inline-display.cell-qty { display: flex; align-items: center; justify-content: center;
+    min-height: 80px; }
+  .inline-display.cell-qty .inline-value { text-align: center; color: #1a1a1a;
+    font-weight: 700; font-size: 18px; }
 
   /* === 폼 === */
   .form-body { padding: 16px 14px 40px; }
@@ -1456,8 +1465,8 @@ const styles = `
   @media (max-width: 768px) {
     .items-table { overflow-x: auto; }
     .items-header, .item-row {
-      grid-template-columns: 32px minmax(180px, 1fr) 120px 90px 140px;
-      min-width: 562px;
+      grid-template-columns: 32px minmax(180px, 1fr) 80px 100px 90px 140px;
+      min-width: 650px;
     }
     .item-row { min-height: 260px; }
     .td-image { min-height: 260px; }
