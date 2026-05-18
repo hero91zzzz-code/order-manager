@@ -196,11 +196,6 @@ export default function OrderManager() {
             onKeyDown={(e) => e.key === 'Enter' && handleAuth()} autoFocus />
           {authError && <div className="auth-error"><AlertCircle size={14} /> {authError}</div>}
           <button className="auth-btn" onClick={handleAuth}>접속</button>
-          <div className="auth-hint">
-            <div className="hint-row"><span className="hint-tag edit">관리</span><code>admin1234</code></div>
-            <div className="hint-row"><span className="hint-tag view">보기</span><code>view1234</code></div>
-            <div className="auth-hint-note">실제 사용 전 코드 상단에서 비밀번호를 변경하세요</div>
-          </div>
         </div>
       </div>
     );
