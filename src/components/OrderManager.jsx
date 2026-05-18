@@ -516,10 +516,10 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
       // 컬럼 너비 설정
       ws.columns = [
         { width: 6 },   // A: 번호
-        { width: 28 },  // B: 이미지
-        { width: 10 },  // C: 수량
-        { width: 12 },  // D: 단가
-        { width: 26 },  // E: 비고
+        { width: 32 },  // B: 이미지
+        { width: 12 },  // C: 수량
+        { width: 14 },  // D: 단가
+        { width: 30 },  // E: 비고
       ];
 
       // 제목
@@ -579,24 +579,22 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
       for (let i = 0; i < (sheet.items || []).length; i++) {
         const item = sheet.items[i];
         const row = currentRow;
-        ws.getRow(row).height = 140;
+        ws.getRow(row).height = 200;
 
         // 번호
         const noCell = ws.getCell(`A${row}`);
         noCell.value = i + 1;
-        noCell.font = { name: '맑은 고딕', size: 12, bold: true };
+        noCell.font = { name: '맑은 고딕', size: 14, bold: true };
         noCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        // 이미지 (B 컬럼) - URL 또는 base64 모두 처리
+        // 이미지 (B 컬럼) - URL 또는 base64 모두 처리, 픽셀 단위로 셀에 꽉 채움
         if (item.photo) {
           try {
             let base64, ext;
             if (item.photo.startsWith('data:')) {
-              // base64 형식
               base64 = item.photo.split(',')[1];
               ext = item.photo.includes('image/png') ? 'png' : 'jpeg';
             } else {
-              // URL 형식 - fetch해서 base64로 변환
               const response = await fetch(item.photo);
               const blob = await response.blob();
               const arrayBuffer = await blob.arrayBuffer();
@@ -609,9 +607,11 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
               ext = blob.type.includes('png') ? 'png' : 'jpeg';
             }
             const imageId = wb.addImage({ base64, extension: ext });
+            // B 컬럼(인덱스 1) 전체를 차지: col 1.0 ~ 2.0, row (current-1) ~ (current)
+            // 양옆/위아래 살짝 여백
             ws.addImage(imageId, {
-              tl: { col: 1.1, row: row - 1 + 0.1 },
-              br: { col: 1.9, row: row - 1 + 0.9 },
+              tl: { col: 1.05, row: row - 1 + 0.05 },
+              br: { col: 1.95, row: row - 1 + 0.95 },
               editAs: 'oneCell'
             });
           } catch (e) { console.error('이미지 삽입 실패', e); }
@@ -620,19 +620,19 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
         // 수량
         const qtyCell = ws.getCell(`C${row}`);
         qtyCell.value = item.quantity || '';
-        qtyCell.font = { name: '맑은 고딕', size: 11 };
+        qtyCell.font = { name: '맑은 고딕', size: 14, bold: true };
         qtyCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
         // 단가
         const priceCell = ws.getCell(`D${row}`);
         priceCell.value = item.price || '';
-        priceCell.font = { name: '맑은 고딕', size: 11, color: { argb: 'FFCC0000' } };
+        priceCell.font = { name: '맑은 고딕', size: 13, color: { argb: 'FFCC0000' } };
         priceCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
 
         // 비고
         const notesCell = ws.getCell(`E${row}`);
         notesCell.value = item.notes || '';
-        notesCell.font = { name: '맑은 고딕', size: 11, bold: true, color: { argb: 'FFCC0000' } };
+        notesCell.font = { name: '맑은 고딕', size: 13, bold: true, color: { argb: 'FFCC0000' } };
         notesCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
 
         // 테두리
@@ -724,21 +724,11 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
                   )}
                 </div>
 
-                {/* 품목 정보 (품목명 + 기한 + 상태 토글) */}
+                {/* 품목 정보 (품목명 + 상태 토글) */}
                 <div className="td-info">
                   <div className="item-content">{item.content}</div>
 
                   <div className="item-meta-row">
-                    {item.deadline && (
-                      <span className={`item-deadline ${daysLeft !== null && item.status !== 'done' ? (daysLeft < 0 ? 'overdue' : daysLeft <= 3 ? 'soon' : '') : ''}`}>
-                        <Clock size={14} /> {item.deadline}
-                        {daysLeft !== null && item.status !== 'done' && (
-                          <span className="dday">
-                            {daysLeft < 0 ? `${Math.abs(daysLeft)}일↑` : daysLeft === 0 ? '오늘' : `D-${daysLeft}`}
-                          </span>
-                        )}
-                      </span>
-                    )}
                     <button
                       className={`item-status-toggle ${item.status === 'done' ? 'done' : 'progress'}`}
                       onClick={() => onToggleItemStatus(idx)}
@@ -783,7 +773,7 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
                   />
                 </div>
 
-                {/* 비고 (인라인 편집) */}
+                {/* 비고 (인라인 편집) + 기한 표시 */}
                 <div className="td-notes">
                   <InlineField
                     value={item.notes}
@@ -798,6 +788,16 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
                     multiline={true}
                     cellStyle="notes"
                   />
+                  {item.deadline && (
+                    <div className={`notes-deadline ${daysLeft !== null && item.status !== 'done' ? (daysLeft < 0 ? 'overdue' : daysLeft <= 3 ? 'soon' : '') : ''}`}>
+                      <Clock size={13} /> {item.deadline}
+                      {daysLeft !== null && item.status !== 'done' && (
+                        <span className="dday">
+                          {daysLeft < 0 ? `${Math.abs(daysLeft)}일↑` : daysLeft === 0 ? '오늘' : `D-${daysLeft}`}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -1087,17 +1087,6 @@ function ItemForm({ index, item, isFirst, onChange, onRemove, compressImage }) {
               onChange={(e) => onChange({ notes: e.target.value })}
               placeholder="특이사항, 메모 등" rows={2} />
           </div>
-
-          <div className="status-toggle small">
-            <button type="button" className={`toggle-btn ${item.status !== 'done' ? 'active' : ''}`}
-              onClick={() => onChange({ status: 'progress' })}>
-              <Circle size={12} /> 진행중
-            </button>
-            <button type="button" className={`toggle-btn done ${item.status === 'done' ? 'active' : ''}`}
-              onClick={() => onChange({ status: 'done' })}>
-              <CheckCircle2 size={12} /> 완료
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -1349,6 +1338,19 @@ const styles = `
   .item-status-toggle.progress { background: #f0ebd8; color: #8b6914; }
   .item-status-toggle.done { background: #e8f0e8; color: #4a7048; }
   .item-status-toggle:disabled { cursor: default; }
+
+  /* 비고 칸 - 비고 + 기한 세로 배치 */
+  .td-notes { display: flex; flex-direction: column; gap: 8px; }
+  .notes-deadline { display: inline-flex; align-items: center; gap: 5px;
+    font-size: 13px; color: #555; font-weight: 600; white-space: nowrap;
+    padding: 6px 8px; background: #fafaf7; border-radius: 6px;
+    margin-top: auto; justify-content: center; }
+  .notes-deadline.soon { color: #a05a0a; background: #fef7e0; }
+  .notes-deadline.overdue { color: #a82820; background: #fdeae6; }
+  .notes-deadline .dday { margin-left: 4px; padding: 2px 6px; border-radius: 4px;
+    background: #ebe9e0; font-weight: 700; font-size: 11px; }
+  .notes-deadline.soon .dday { background: #fef0d8; color: #a05a0a; }
+  .notes-deadline.overdue .dday { background: #fbe3e0; color: #a82820; }
 
   /* 수량 셀 - 가운데 정렬, 큰 글씨 */
   .inline-display.cell-qty { display: flex; align-items: center; justify-content: center;
