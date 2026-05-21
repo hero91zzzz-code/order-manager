@@ -935,45 +935,122 @@ function InvoiceModal({ sheet, onClose }) {
   // PDF 파일명
   const pdfFileName = `거래명세표_${sheet.client || ''}_${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}.pdf`;
 
+  // 이미지 URL을 base64로 변환 (CORS 우회)
+  const imageToBase64 = async (url) => {
+    try {
+      // 1차 시도: 일반 fetch
+      const response = await fetch(url, { mode: 'cors', cache: 'no-cache' });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const blob = await response.blob();
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.error('이미지 변환 실패 (fetch)', url, e);
+      // 2차 시도: Image 객체로 로드 후 canvas 변환
+      try {
+        return await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              resolve(canvas.toDataURL('image/jpeg', 0.9));
+            } catch (err) {
+              reject(err);
+            }
+          };
+          img.onerror = reject;
+          img.src = url;
+        });
+      } catch (e2) {
+        console.error('이미지 변환 실패 (canvas)', url, e2);
+        return null;
+      }
+    }
+  };
+
   // PDF 생성 (Blob 반환)
   const generatePDF = async () => {
     if (!paperRef.current) throw new Error('PDF 영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
     const jsPDF = await loadJsPDF();
 
-    // 종이 영역을 canvas로 변환 (고해상도)
-    const canvas = await html2canvas(paperRef.current, {
-      scale: 2,
-      backgroundColor: '#ffffff',
-      useCORS: true,
-      logging: false,
-    });
-
-    // A4 사이즈에 맞춰 PDF 생성
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth - 20;  // 여백 10mm 양쪽
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    let position = 10;
-    if (imgHeight <= pageHeight - 20) {
-      // 한 페이지에 들어감
-      pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
-    } else {
-      // 여러 페이지로 분할
-      let heightLeft = imgHeight;
-      pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
-      heightLeft -= (pageHeight - 20);
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight + 10;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
-        heightLeft -= (pageHeight - 20);
+    // 1) 종이 안의 모든 이미지를 base64로 변환 (CORS 문제 해결)
+    const imgs = paperRef.current.querySelectorAll('img');
+    const originalSrcs = [];
+    for (const img of imgs) {
+      originalSrcs.push(img.src);
+      if (img.src && !img.src.startsWith('data:')) {
+        const base64 = await imageToBase64(img.src);
+        if (base64) {
+          img.src = base64;
+          // 이미지 다시 로드 대기
+          await new Promise((resolve) => {
+            if (img.complete) resolve();
+            else {
+              img.onload = resolve;
+              img.onerror = resolve;
+            }
+          });
+        }
       }
     }
-    return pdf.output('blob');
+
+    try {
+      // 2) 종이 영역을 canvas로 변환
+      const canvas = await html2canvas(paperRef.current, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        imageTimeout: 15000,
+      });
+
+      // 3) A4 한 페이지에 맞춰 자동 축소
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();   // 210mm
+      const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
+      const margin = 10;
+      const maxWidth = pageWidth - margin * 2;   // 190mm
+      const maxHeight = pageHeight - margin * 2; // 277mm
+
+      // 캔버스 비율
+      const canvasRatio = canvas.height / canvas.width;
+      // 가로 기준으로 맞췄을 때 높이
+      let imgWidth = maxWidth;
+      let imgHeight = imgWidth * canvasRatio;
+
+      // 높이가 페이지를 넘으면, 세로 기준으로 맞춰서 축소
+      if (imgHeight > maxHeight) {
+        imgHeight = maxHeight;
+        imgWidth = imgHeight / canvasRatio;
+      }
+
+      // 가운데 정렬
+      const xOffset = (pageWidth - imgWidth) / 2;
+      const yOffset = margin;
+
+      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, imgWidth, imgHeight);
+
+      return pdf.output('blob');
+    } finally {
+      // 원래 src로 복원 (블럽 URL 해제 등은 자동)
+      imgs.forEach((img, i) => {
+        if (originalSrcs[i] && !originalSrcs[i].startsWith('data:')) {
+          img.src = originalSrcs[i];
+        }
+      });
+    }
   };
 
   // 공유 (모바일: 공유 시트, PC: 다운로드)
@@ -1945,10 +2022,10 @@ const styles = `
   .td-total-amount { font-size: 14px; font-weight: 700; }
 
   /* 사진 행 - 품목 바로 아래 사진 */
-  .tr-item-photo td { background: #fafafa; padding: 8px !important;
+  .tr-item-photo td { background: #fafafa; padding: 6px !important;
     border-top: 1px solid #ddd !important; }
   .td-item-photo { text-align: center; vertical-align: middle; }
-  .invoice-photo-box { display: inline-block; width: 140px; height: 140px;
+  .invoice-photo-box { display: inline-block; width: 110px; height: 110px;
     background: #fff; border: 1px solid #ddd; border-radius: 4px;
     overflow: hidden; }
   .invoice-photo-box img { width: 100%; height: 100%;
