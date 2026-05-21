@@ -1072,14 +1072,57 @@ function InvoiceModal({ sheet, onClose }) {
     }
   };
 
-  // 이미지 URL을 base64로 변환 (CORS 우회)
-  // 종이 영역을 canvas로 캡처 (단순)
+  // 저장 직전 모든 사진을 base64로 교체하고 완전 로드 대기
+  const prepareImages = async () => {
+    if (!paperRef.current) return;
+    const imgs = Array.from(paperRef.current.querySelectorAll('.invoice-photo-box img'));
+    for (const img of imgs) {
+      const src = img.src;
+      if (src && !src.startsWith('data:')) {
+        // 캐시에 있으면 사용, 없으면 새로 변환
+        let base64 = photoCache[src];
+        if (!base64) {
+          base64 = await imageToBase64(src);
+          if (base64) {
+            setPhotoCache(prev => ({ ...prev, [src]: base64 }));
+          }
+        }
+        if (base64) {
+          // src 교체하고 이미지 로드 끝날 때까지 대기
+          await new Promise((resolve) => {
+            const onDone = () => {
+              img.onload = null;
+              img.onerror = null;
+              resolve();
+            };
+            img.onload = onDone;
+            img.onerror = onDone;
+            img.src = base64;
+            // 이미 로드 끝난 경우 (캐시)
+            if (img.complete && img.naturalWidth > 0) {
+              setTimeout(onDone, 0);
+            }
+          });
+        }
+      } else if (src && src.startsWith('data:') && !img.complete) {
+        // 이미 base64인데 아직 로드 중이면 대기
+        await new Promise((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+      }
+    }
+    // 추가 안정화 대기 - 페인트 사이클 보장
+    await new Promise(resolve => setTimeout(resolve, 500));
+  };
+
+  // 종이 영역을 canvas로 캡처
   const capturePaper = async () => {
     if (!paperRef.current) throw new Error('영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
 
-    // 렌더링 안정화 대기
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // 사진들 base64로 변환되고 로드 끝날 때까지 확실히 대기
+    await prepareImages();
 
     const canvas = await html2canvas(paperRef.current, {
       scale: 2,
