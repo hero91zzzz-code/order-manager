@@ -520,6 +520,46 @@ const COMPANY_INFO = {
   bank: '신한은행 110 153 156742 김종운(데이)',
 };
 
+// 이미지 URL → base64 변환 (CORS 우회)
+async function imageToBase64(url) {
+  try {
+    const response = await fetch(url, { mode: 'cors', cache: 'no-cache' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const blob = await response.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.error('이미지 변환 실패 (fetch)', url, e);
+    try {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/jpeg', 0.9));
+          } catch (err) {
+            reject(err);
+          }
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+    } catch (e2) {
+      console.error('이미지 변환 실패 (canvas)', url, e2);
+      return null;
+    }
+  }
+}
+
 // ============ 상세 (주문서 표시) ============
 function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggleItemStatus, onUpdateField }) {
   const [zoomPhoto, setZoomPhoto] = useState(null);
@@ -885,6 +925,30 @@ function InvoiceModal({ sheet, onClose }) {
   const [generating, setGenerating] = useState(false);
   const paperRef = useRef(null);
 
+  // 사진 base64 캐시: { [photoUrl]: base64 }
+  const [photoCache, setPhotoCache] = useState({});
+
+  // 모달 열릴 때 모든 사진을 미리 base64로 변환
+  useEffect(() => {
+    let cancelled = false;
+    const photos = (sheet.items || [])
+      .map(it => it.photo)
+      .filter(p => p && !p.startsWith('data:'));
+    const unique = [...new Set(photos)];
+
+    (async () => {
+      const cache = {};
+      for (const url of unique) {
+        const base64 = await imageToBase64(url);
+        if (cancelled) return;
+        if (base64) cache[url] = base64;
+      }
+      if (!cancelled) setPhotoCache(cache);
+    })();
+
+    return () => { cancelled = true; };
+  }, [sheet.items]);
+
   const toggleItem = (idx) => {
     setSelectedIdx(prev => {
       const next = new Set(prev);
@@ -1009,146 +1073,23 @@ function InvoiceModal({ sheet, onClose }) {
   };
 
   // 이미지 URL을 base64로 변환 (CORS 우회)
-  const imageToBase64 = async (url) => {
-    try {
-      // 1차 시도: 일반 fetch
-      const response = await fetch(url, { mode: 'cors', cache: 'no-cache' });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const blob = await response.blob();
-      return await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {
-      console.error('이미지 변환 실패 (fetch)', url, e);
-      // 2차 시도: Image 객체로 로드 후 canvas 변환
-      try {
-        return await new Promise((resolve, reject) => {
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.onload = () => {
-            try {
-              const canvas = document.createElement('canvas');
-              canvas.width = img.naturalWidth;
-              canvas.height = img.naturalHeight;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(img, 0, 0);
-              resolve(canvas.toDataURL('image/jpeg', 0.9));
-            } catch (err) {
-              reject(err);
-            }
-          };
-          img.onerror = reject;
-          img.src = url;
-        });
-      } catch (e2) {
-        console.error('이미지 변환 실패 (canvas)', url, e2);
-        return null;
-      }
-    }
-  };
-
-  // 종이 영역을 canvas로 캡처 + 사진 별도 그려넣기 (폰 호환성)
+  // 종이 영역을 canvas로 캡처 (단순)
   const capturePaper = async () => {
     if (!paperRef.current) throw new Error('영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
 
-    // 1) 사진 박스들의 위치 + 이미지 정보 수집 (캡처 전)
-    const photoBoxes = Array.from(paperRef.current.querySelectorAll('.invoice-photo-box'));
-    const paperRect = paperRef.current.getBoundingClientRect();
-    const photoInfos = [];
+    // 렌더링 안정화 대기
+    await new Promise(resolve => setTimeout(resolve, 200));
 
-    for (const box of photoBoxes) {
-      const idx = parseInt(box.dataset.itemIdx || '-1', 10);
-      const item = selectedItems.find(it => it.idx === idx);
-      if (!item || !item.photo) continue;
-
-      const rect = box.getBoundingClientRect();
-      const base64 = await imageToBase64(item.photo);
-
-      // 종이 기준 상대 좌표 (비율로 저장)
-      photoInfos.push({
-        // 0~1 사이 비율
-        relX: (rect.left - paperRect.left) / paperRect.width,
-        relY: (rect.top - paperRect.top) / paperRect.height,
-        relW: rect.width / paperRect.width,
-        relH: rect.height / paperRect.height,
-        base64,
-      });
-    }
-
-    // 2) 사진들을 임시로 숨김 (캡처에서 빠지게)
-    photoBoxes.forEach(box => {
-      const img = box.querySelector('img');
-      if (img) img.style.visibility = 'hidden';
+    const canvas = await html2canvas(paperRef.current, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      allowTaint: true,
+      logging: false,
+      imageTimeout: 15000,
     });
-
-    try {
-      // 3) 종이 캡처 (사진 없이)
-      const baseCanvas = await html2canvas(paperRef.current, {
-        scale: 2,
-        backgroundColor: '#ffffff',
-        useCORS: true,
-        allowTaint: true,
-        logging: false,
-        imageTimeout: 5000,
-      });
-
-      // 4) 캡처 결과에 사진들 직접 그려넣기 (캔버스 실제 크기 기준)
-      const ctx = baseCanvas.getContext('2d');
-      const canvasW = baseCanvas.width;
-      const canvasH = baseCanvas.height;
-
-      for (const info of photoInfos) {
-        if (!info.base64) continue;
-        try {
-          // 이미지 로드
-          const photoImg = await new Promise((resolve, reject) => {
-            const im = new Image();
-            im.onload = () => resolve(im);
-            im.onerror = reject;
-            im.src = info.base64;
-          });
-
-          // 캔버스 좌표로 변환 (비율 × 캔버스 크기)
-          const boxX = info.relX * canvasW;
-          const boxY = info.relY * canvasH;
-          const boxW = info.relW * canvasW;
-          const boxH = info.relH * canvasH;
-
-          // contain 방식으로 비율 유지하며 박스 안에 그리기
-          const photoRatio = photoImg.width / photoImg.height;
-          const boxRatio = boxW / boxH;
-          let drawW, drawH;
-          if (photoRatio > boxRatio) {
-            drawW = boxW;
-            drawH = boxW / photoRatio;
-          } else {
-            drawH = boxH;
-            drawW = boxH * photoRatio;
-          }
-          const drawX = boxX + (boxW - drawW) / 2;
-          const drawY = boxY + (boxH - drawH) / 2;
-
-          // 박스 영역 흰색으로 한번 깔끔하게 지우고 사진 그리기
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(boxX, boxY, boxW, boxH);
-          ctx.drawImage(photoImg, drawX, drawY, drawW, drawH);
-        } catch (e) {
-          console.error('사진 그려넣기 실패', e);
-        }
-      }
-
-      return baseCanvas;
-    } finally {
-      // 사진 표시 복구
-      photoBoxes.forEach(box => {
-        const img = box.querySelector('img');
-        if (img) img.style.visibility = '';
-      });
-    }
+    return canvas;
   };
 
   // 이미지(PNG) 생성 - Blob 반환
@@ -1326,7 +1267,7 @@ function InvoiceModal({ sheet, onClose }) {
                         <tr className="tr-item-photo">
                           <td className="td-item-photo">
                             <div className="invoice-photo-box" data-item-idx={it.idx}>
-                              <img src={it.photo} alt={it.content} />
+                              <img src={photoCache[it.photo] || it.photo} alt={it.content} />
                             </div>
                           </td>
                           <td colSpan={3} className="td-photo-empty"></td>
