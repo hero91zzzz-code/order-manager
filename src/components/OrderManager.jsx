@@ -596,11 +596,11 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
 
       // 컬럼 너비 설정
       ws.columns = [
-        { width: 6 },   // A: 번호
-        { width: 32 },  // B: 이미지
-        { width: 12 },  // C: 수량
-        { width: 14 },  // D: 단가
-        { width: 30 },  // E: 비고
+        { width: 6 },    // A: 번호
+        { width: 38 },   // B: 이미지 (더 넓게)
+        { width: 12 },   // C: 수량
+        { width: 14 },   // D: 단가
+        { width: 30 },   // E: 비고
       ];
 
       // 제목
@@ -660,7 +660,7 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
       for (let i = 0; i < (sheet.items || []).length; i++) {
         const item = sheet.items[i];
         const row = currentRow;
-        ws.getRow(row).height = 200;
+        ws.getRow(row).height = 220;
 
         // 번호
         const noCell = ws.getCell(`A${row}`);
@@ -668,7 +668,7 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
         noCell.font = { name: '맑은 고딕', size: 14, bold: true };
         noCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        // 이미지 (B 컬럼) - URL 또는 base64 모두 처리, 픽셀 단위로 셀에 꽉 채움
+        // 이미지 (B 컬럼) - 셀에 꽉 차게 픽셀 크기로 직접 지정
         if (item.photo) {
           try {
             let base64, ext;
@@ -688,11 +688,11 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
               ext = blob.type.includes('png') ? 'png' : 'jpeg';
             }
             const imageId = wb.addImage({ base64, extension: ext });
-            // B 컬럼(인덱스 1) 전체를 차지: col 1.0 ~ 2.0, row (current-1) ~ (current)
-            // 양옆/위아래 살짝 여백
+            // 컬럼 B 너비 38 ≈ 266px, 행 높이 220 ≈ 293px
+            // 정사각형에 가깝게, 셀에 꽉 차게
             ws.addImage(imageId, {
               tl: { col: 1.05, row: row - 1 + 0.05 },
-              br: { col: 1.95, row: row - 1 + 0.95 },
+              ext: { width: 250, height: 280 },
               editAs: 'oneCell'
             });
           } catch (e) { console.error('이미지 삽입 실패', e); }
@@ -1125,23 +1125,111 @@ function InvoiceModal({ sheet, onClose }) {
     await new Promise(resolve => setTimeout(resolve, 500));
   };
 
-  // 종이 영역을 canvas로 캡처
+  // 종이 영역 캡처 + 사진은 직접 그려넣기 (100% 확실한 방법)
   const capturePaper = async () => {
     if (!paperRef.current) throw new Error('영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
 
-    // 사진들 base64로 변환되고 로드 끝날 때까지 확실히 대기
-    await prepareImages();
+    // 1) 사진들의 위치와 base64를 미리 수집
+    const photoBoxes = Array.from(paperRef.current.querySelectorAll('.invoice-photo-box'));
+    const paperRect = paperRef.current.getBoundingClientRect();
+    const photosToDraw = [];
 
-    const canvas = await html2canvas(paperRef.current, {
-      scale: 2,
-      backgroundColor: '#ffffff',
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      imageTimeout: 15000,
+    for (const box of photoBoxes) {
+      const idx = parseInt(box.dataset.itemIdx || '-1', 10);
+      const item = selectedItems.find(it => it.idx === idx);
+      if (!item || !item.photo) continue;
+
+      // base64 변환 (캐시 우선)
+      let base64 = photoCache[item.photo];
+      if (!base64 && item.photo.startsWith('data:')) {
+        base64 = item.photo;
+      }
+      if (!base64) {
+        base64 = await imageToBase64(item.photo);
+      }
+      if (!base64) continue;
+
+      const rect = box.getBoundingClientRect();
+      photosToDraw.push({
+        // 종이 대비 비율 (해상도 독립적)
+        rx: (rect.left - paperRect.left) / paperRect.width,
+        ry: (rect.top - paperRect.top) / paperRect.height,
+        rw: rect.width / paperRect.width,
+        rh: rect.height / paperRect.height,
+        base64,
+      });
+    }
+
+    // 2) 캡처 동안 사진 자리를 빈 박스로 (회색 테두리만 남기고)
+    photoBoxes.forEach(box => {
+      const img = box.querySelector('img');
+      if (img) img.style.display = 'none';
     });
-    return canvas;
+
+    let baseCanvas;
+    try {
+      // 3) 종이 캡처 (사진 빠진 상태)
+      baseCanvas = await html2canvas(paperRef.current, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        imageTimeout: 5000,
+      });
+    } finally {
+      // 사진 표시 복구
+      photoBoxes.forEach(box => {
+        const img = box.querySelector('img');
+        if (img) img.style.display = '';
+      });
+    }
+
+    // 4) 캔버스에 사진들을 직접 그려넣기
+    const ctx = baseCanvas.getContext('2d');
+    const canvasW = baseCanvas.width;
+    const canvasH = baseCanvas.height;
+
+    for (const p of photosToDraw) {
+      try {
+        const photoImg = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = () => reject(new Error('이미지 로드 실패'));
+          im.src = p.base64;
+        });
+
+        // 박스 영역을 캔버스 좌표로
+        const bx = p.rx * canvasW;
+        const by = p.ry * canvasH;
+        const bw = p.rw * canvasW;
+        const bh = p.rh * canvasH;
+
+        // 박스 안에 사진 비율 맞춰서 그리기 (contain)
+        const photoRatio = photoImg.naturalWidth / photoImg.naturalHeight;
+        const boxRatio = bw / bh;
+        let dw, dh;
+        if (photoRatio > boxRatio) {
+          dw = bw;
+          dh = bw / photoRatio;
+        } else {
+          dh = bh;
+          dw = bh * photoRatio;
+        }
+        const dx = bx + (bw - dw) / 2;
+        const dy = by + (bh - dh) / 2;
+
+        // 박스 영역 흰색으로 깔끔하게 깔고 사진 그리기
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(bx + 2, by + 2, bw - 4, bh - 4);
+        ctx.drawImage(photoImg, dx, dy, dw, dh);
+      } catch (e) {
+        console.error('사진 그리기 실패', e);
+      }
+    }
+
+    return baseCanvas;
   };
 
   // 이미지(PNG) 생성 - Blob 반환
@@ -1348,9 +1436,15 @@ function InvoiceModal({ sheet, onClose }) {
                 <td className="td-num td-advance-amount">
                   <input
                     type="text"
+                    inputMode="numeric"
                     className="advance-input"
                     value={advance}
-                    onChange={(e) => setAdvance(e.target.value)}
+                    onChange={(e) => {
+                      // 숫자만 추출 후 3자리 콤마 포맷
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      const formatted = raw ? parseInt(raw, 10).toLocaleString('ko-KR') : '';
+                      setAdvance(formatted);
+                    }}
                     placeholder="0"
                   />
                 </td>
