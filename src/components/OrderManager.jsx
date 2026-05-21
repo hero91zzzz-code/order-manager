@@ -928,6 +928,10 @@ function InvoiceModal({ sheet, onClose }) {
   // 선수금 (사용자 입력)
   const [advance, setAdvance] = useState('');
   const [generating, setGenerating] = useState(false);
+  // 부가세 포함 여부
+  const [includeVat, setIncludeVat] = useState(true);
+  // 품목별 메모: { [idx]: '메모 내용' }
+  const [memos, setMemos] = useState({});
   const paperRef = useRef(null);
 
   // 사진 base64 캐시: { [photoUrl]: base64 }
@@ -999,7 +1003,7 @@ function InvoiceModal({ sheet, onClose }) {
     });
 
   const subtotal = selectedItems.reduce((sum, it) => sum + it.amount, 0);
-  const vat = Math.round(subtotal * 0.1);
+  const vat = includeVat ? Math.round(subtotal * 0.1) : 0;
   const total = subtotal + vat;
   const advanceAmount = parseNumber(advance);
   const balance = total - advanceAmount;
@@ -1338,6 +1342,21 @@ function InvoiceModal({ sheet, onClose }) {
           </div>
         </div>
 
+        {/* 옵션 영역 */}
+        <div className="invoice-options no-print">
+          <label className={`invoice-vat-toggle ${includeVat ? 'on' : 'off'}`}>
+            <input
+              type="checkbox"
+              checked={includeVat}
+              onChange={(e) => setIncludeVat(e.target.checked)}
+            />
+            <span className="invoice-vat-label">부가세 10% 포함</span>
+            <span className="invoice-vat-hint">
+              {includeVat ? '체크 해제하면 부가세 미적용' : '부가세 미적용 상태'}
+            </span>
+          </label>
+        </div>
+
         <div className="invoice-paper" ref={paperRef}>
           <h1 className="invoice-title">거래명세표</h1>
 
@@ -1395,7 +1414,8 @@ function InvoiceModal({ sheet, onClose }) {
                 </tr>
               ) : (
                 <>
-                  {selectedItems.map((it) => (
+                  {selectedItems.map((it, displayIdx) => {
+                    return (
                     <React.Fragment key={it.idx}>
                       <tr>
                         <td className="td-item">{it.content}</td>
@@ -1410,17 +1430,29 @@ function InvoiceModal({ sheet, onClose }) {
                               <img src={photoCache[it.photo] || it.photo} alt={it.content} />
                             </div>
                           </td>
-                          <td colSpan={3} className="td-photo-empty"></td>
+                          <td colSpan={3} className="td-item-memo">
+                            <div className="memo-label">메모</div>
+                            <textarea
+                              className="memo-input"
+                              value={memos[it.idx] || ''}
+                              onChange={(e) => setMemos(prev => ({ ...prev, [it.idx]: e.target.value }))}
+                              placeholder="특이사항, 옵션, 색상 등 자유 입력..."
+                              rows={4}
+                            />
+                          </td>
                         </tr>
                       )}
                     </React.Fragment>
-                  ))}
-                  <tr>
-                    <td className="td-item"></td>
-                    <td className="td-num"></td>
-                    <td className="td-num td-vat-label">부가세</td>
-                    <td className="td-num">{fmt(vat)}</td>
-                  </tr>
+                    );
+                  })}
+                  {includeVat && (
+                    <tr>
+                      <td className="td-item"></td>
+                      <td className="td-num"></td>
+                      <td className="td-num td-vat-label">부가세</td>
+                      <td className="td-num">{fmt(vat)}</td>
+                    </tr>
+                  )}
                 </>
               )}
             </tbody>
@@ -2206,6 +2238,34 @@ const styles = `
   .invoice-photo-box img { width: 100%; height: 100%;
     object-fit: contain; display: block; }
   .td-photo-empty { background: #fafafa !important; }
+
+  /* 부가세 토글 옵션 영역 */
+  .invoice-options { background: #fff; padding: 12px 16px;
+    border-bottom: 1px solid #eee; }
+  .invoice-vat-toggle { display: flex; align-items: center; gap: 9px;
+    padding: 9px 12px; border-radius: 7px; cursor: pointer;
+    background: #f5f4ee; transition: background 0.15s; }
+  .invoice-vat-toggle.on { background: #f0ebd8; }
+  .invoice-vat-toggle.off { background: #f5f4ee; opacity: 0.85; }
+  .invoice-vat-toggle:hover { background: #ebe4cc; }
+  .invoice-vat-toggle input[type="checkbox"] { width: 16px; height: 16px;
+    accent-color: #1a1a1a; cursor: pointer; flex-shrink: 0; }
+  .invoice-vat-label { font-size: 13px; font-weight: 600; color: #1a1a1a; }
+  .invoice-vat-hint { font-size: 11.5px; color: #888; margin-left: auto;
+    text-align: right; }
+
+  /* 메모란 - 사진 옆에 표시 */
+  .td-item-memo { background: #fafafa !important; padding: 8px 10px !important;
+    vertical-align: top; }
+  .memo-label { font-size: 10.5px; font-weight: 700; color: #888;
+    letter-spacing: 0.05em; margin-bottom: 5px; }
+  .memo-input { width: 100%; min-height: 90px; padding: 7px 9px;
+    border: 1px solid #ddd; border-radius: 4px; font-size: 12.5px;
+    font-family: inherit; resize: vertical; outline: none;
+    box-sizing: border-box; background: #fff; line-height: 1.5;
+    color: #1a1a1a; }
+  .memo-input:focus { border-color: #1a1a1a; }
+  .memo-input::placeholder { color: #aaa; }
 
   .td-empty-msg { text-align: center !important; padding: 30px 8px !important;
     color: #999; font-size: 13px; }
