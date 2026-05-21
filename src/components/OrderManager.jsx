@@ -1430,7 +1430,8 @@ function InvoiceModal({ sheet, onClose }) {
                               <img src={photoCache[it.photo] || it.photo} alt={it.content} />
                             </div>
                           </td>
-                          <td colSpan={3} className="td-item-memo">
+                          <td className="td-photo-empty"></td>
+                          <td colSpan={2} className="td-item-memo">
                             <div className="memo-label">메모</div>
                             <textarea
                               className="memo-input"
