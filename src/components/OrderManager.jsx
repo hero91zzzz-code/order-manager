@@ -909,11 +909,16 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
 
 // ============ 거래명세표 모달 ============
 function InvoiceModal({ sheet, onClose }) {
-  // 작성 날짜 (오늘)
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth() + 1;
-  const day = today.getDate();
+  // 작성 날짜 (오늘) - useState로 한번만 계산
+  const [todayInfo] = useState(() => {
+    const t = new Date();
+    return {
+      year: t.getFullYear(),
+      month: t.getMonth() + 1,
+      day: t.getDate(),
+    };
+  });
+  const { year, month, day } = todayInfo;
 
   // 품목 선택 상태 - 처음엔 모두 선택됨
   const [selectedIdx, setSelectedIdx] = useState(
@@ -936,6 +941,8 @@ function InvoiceModal({ sheet, onClose }) {
       .filter(p => p && !p.startsWith('data:'));
     const unique = [...new Set(photos)];
 
+    if (unique.length === 0) return;
+
     (async () => {
       const cache = {};
       for (const url of unique) {
@@ -943,7 +950,9 @@ function InvoiceModal({ sheet, onClose }) {
         if (cancelled) return;
         if (base64) cache[url] = base64;
       }
-      if (!cancelled) setPhotoCache(cache);
+      if (!cancelled && Object.keys(cache).length > 0) {
+        setPhotoCache(cache);
+      }
     })();
 
     return () => { cancelled = true; };
