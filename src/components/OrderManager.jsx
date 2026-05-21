@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, ArrowLeft, Trash2, Edit3, X, Camera, Lock, Eye, Calendar, Clock, CheckCircle2, Circle, AlertCircle, FileText, Download, Receipt } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Trash2, Edit3, X, Camera, Lock, Eye, Calendar, Clock, CheckCircle2, Circle, AlertCircle, FileText, Download, Receipt, Share2 } from 'lucide-react';
 import { fetchOrderSheets, saveOrderSheet, deleteOrderSheet, uploadPhoto, deletePhoto } from '@/lib/supabase';
 
 const EDIT_PASSWORD = '1519!';
@@ -439,6 +439,36 @@ function loadExcelJS() {
   return _excelJSPromise;
 }
 
+// html2canvas 동적 로딩 (PDF 생성용)
+let _html2canvasPromise = null;
+function loadHtml2Canvas() {
+  if (typeof window !== 'undefined' && window.html2canvas) return Promise.resolve(window.html2canvas);
+  if (_html2canvasPromise) return _html2canvasPromise;
+  _html2canvasPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+    script.onload = () => resolve(window.html2canvas);
+    script.onerror = () => reject(new Error('html2canvas 로딩 실패'));
+    document.head.appendChild(script);
+  });
+  return _html2canvasPromise;
+}
+
+// jsPDF 동적 로딩
+let _jsPDFPromise = null;
+function loadJsPDF() {
+  if (typeof window !== 'undefined' && window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+  if (_jsPDFPromise) return _jsPDFPromise;
+  _jsPDFPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
+    script.onload = () => resolve(window.jspdf.jsPDF);
+    script.onerror = () => reject(new Error('jsPDF 로딩 실패'));
+    document.head.appendChild(script);
+  });
+  return _jsPDFPromise;
+}
+
 // ============ 인라인 편집 가능한 필드 ============
 function InlineField({ label, value, placeholder, editable, isEditing, draft, onStartEdit, onChangeDraft, onSave, onCancel, multiline, cellStyle }) {
   if (isEditing) {
@@ -852,6 +882,8 @@ function InvoiceModal({ sheet, onClose }) {
 
   // 선수금 (사용자 입력)
   const [advance, setAdvance] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const paperRef = useRef(null);
 
   const toggleItem = (idx) => {
     setSelectedIdx(prev => {
@@ -869,14 +901,14 @@ function InvoiceModal({ sheet, onClose }) {
     setSelectedIdx(new Set());
   };
 
-  // 품목 단가 추출: "300", "10,000", "₩2,500" 등에서 숫자만 추출
+  // 품목 단가 추출
   const parseNumber = (str) => {
     if (!str) return 0;
     const num = parseInt(String(str).replace(/[^0-9]/g, ''), 10);
     return isNaN(num) ? 0 : num;
   };
 
-  // 선택된 품목만 - 원본 인덱스 유지
+  // 선택된 품목만
   const selectedItems = (sheet.items || [])
     .map((it, idx) => ({ original: it, idx }))
     .filter(({ idx }) => selectedIdx.has(idx))
@@ -893,19 +925,123 @@ function InvoiceModal({ sheet, onClose }) {
       };
     });
 
-  // 합계 계산
   const subtotal = selectedItems.reduce((sum, it) => sum + it.amount, 0);
   const vat = Math.round(subtotal * 0.1);
   const total = subtotal + vat;
   const advanceAmount = parseNumber(advance);
   const balance = total - advanceAmount;
-
-  // 숫자 포맷팅
   const fmt = (n) => n.toLocaleString('ko-KR');
 
-  // PDF/인쇄
-  const handlePrint = () => {
-    window.print();
+  // PDF 파일명
+  const pdfFileName = `거래명세표_${sheet.client || ''}_${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}.pdf`;
+
+  // PDF 생성 (Blob 반환)
+  const generatePDF = async () => {
+    if (!paperRef.current) throw new Error('PDF 영역을 찾을 수 없습니다');
+    const html2canvas = await loadHtml2Canvas();
+    const jsPDF = await loadJsPDF();
+
+    // 종이 영역을 canvas로 변환 (고해상도)
+    const canvas = await html2canvas(paperRef.current, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+    });
+
+    // A4 사이즈에 맞춰 PDF 생성
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth - 20;  // 여백 10mm 양쪽
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    let position = 10;
+    if (imgHeight <= pageHeight - 20) {
+      // 한 페이지에 들어감
+      pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
+    } else {
+      // 여러 페이지로 분할
+      let heightLeft = imgHeight;
+      pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
+      heightLeft -= (pageHeight - 20);
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight + 10;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 10, position, imgWidth, imgHeight);
+        heightLeft -= (pageHeight - 20);
+      }
+    }
+    return pdf.output('blob');
+  };
+
+  // 공유 (모바일: 공유 시트, PC: 다운로드)
+  const handleShare = async () => {
+    if (selectedItems.length === 0) {
+      alert('품목을 1개 이상 선택하세요');
+      return;
+    }
+    try {
+      setGenerating(true);
+      const blob = await generatePDF();
+      const file = new File([blob], pdfFileName, { type: 'application/pdf' });
+
+      // Web Share API 지원 여부 확인
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: '거래명세표',
+            text: `${sheet.client} 귀하 거래명세표`,
+          });
+        } catch (shareErr) {
+          // 사용자가 공유 취소한 경우 등 - 무시
+          if (shareErr.name !== 'AbortError') {
+            console.error('공유 실패', shareErr);
+            // 공유 실패 시 다운로드로 폴백
+            downloadBlob(blob, pdfFileName);
+          }
+        }
+      } else {
+        // 공유 API 미지원 (PC 등) - 다운로드
+        downloadBlob(blob, pdfFileName);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('PDF 생성에 실패했습니다: ' + (e.message || ''));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // 다운로드 (PDF를 파일로 저장)
+  const handleDownload = async () => {
+    if (selectedItems.length === 0) {
+      alert('품목을 1개 이상 선택하세요');
+      return;
+    }
+    try {
+      setGenerating(true);
+      const blob = await generatePDF();
+      downloadBlob(blob, pdfFileName);
+    } catch (e) {
+      console.error(e);
+      alert('PDF 생성에 실패했습니다: ' + (e.message || ''));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -916,8 +1052,11 @@ function InvoiceModal({ sheet, onClose }) {
             <span className="invoice-toolbar-title">거래명세표</span>
           </div>
           <div className="invoice-toolbar-right">
-            <button className="invoice-print-btn" onClick={handlePrint} disabled={selectedItems.length === 0}>
-              <Download size={16} /> 인쇄 / PDF 저장
+            <button className="invoice-share-btn" onClick={handleShare} disabled={generating || selectedItems.length === 0}>
+              <Share2 size={15} /> {generating ? '생성중...' : '공유'}
+            </button>
+            <button className="invoice-print-btn" onClick={handleDownload} disabled={generating || selectedItems.length === 0}>
+              <Download size={15} /> PDF 저장
             </button>
             <button className="invoice-close-btn" onClick={onClose}>
               <X size={20} />
@@ -958,7 +1097,7 @@ function InvoiceModal({ sheet, onClose }) {
           </div>
         </div>
 
-        <div className="invoice-paper">
+        <div className="invoice-paper" ref={paperRef}>
           <h1 className="invoice-title">거래명세표</h1>
 
           {/* 상단: 날짜 + 회사정보 */}
@@ -1029,7 +1168,7 @@ function InvoiceModal({ sheet, onClose }) {
                         <tr className="tr-item-photo">
                           <td className="td-item-photo">
                             <div className="invoice-photo-box">
-                              <img src={it.photo} alt={it.content} />
+                              <img src={it.photo} alt={it.content} crossOrigin="anonymous" />
                             </div>
                           </td>
                           <td colSpan={3} className="td-photo-empty"></td>
@@ -1748,6 +1887,13 @@ const styles = `
     cursor: pointer; display: flex; align-items: center; gap: 5px;
     font-family: inherit; }
   .invoice-print-btn:hover { opacity: 0.9; }
+  .invoice-print-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .invoice-share-btn { background: #f5b800; color: #1a1a1a; border: none;
+    padding: 8px 14px; border-radius: 7px; font-size: 13px; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    font-family: inherit; }
+  .invoice-share-btn:hover { background: #e0a800; }
+  .invoice-share-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .invoice-close-btn { background: rgba(255,255,255,0.1); color: #fff; border: none;
     width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
     display: flex; align-items: center; justify-content: center; }
