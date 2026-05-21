@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, ArrowLeft, Trash2, Edit3, X, Camera, Lock, Eye, Calendar, Clock, CheckCircle2, Circle, AlertCircle, FileText, Download } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Trash2, Edit3, X, Camera, Lock, Eye, Calendar, Clock, CheckCircle2, Circle, AlertCircle, FileText, Download, Receipt } from 'lucide-react';
 import { fetchOrderSheets, saveOrderSheet, deleteOrderSheet, uploadPhoto, deletePhoto } from '@/lib/supabase';
 
 const EDIT_PASSWORD = '1519!';
@@ -480,10 +480,20 @@ function InlineField({ label, value, placeholder, editable, isEditing, draft, on
   );
 }
 
+// ============ 회사 정보 (거래명세표 고정 정보) ============
+const COMPANY_INFO = {
+  name: '데이 DAY',
+  phone: 'H.P : 010 4246 4452',
+  address1: '서울시 중구 퇴계로 37',
+  address2: '연세부자재상가 1층 115호',
+  bank: '신한은행 110-153-156742 김종운(데이)',
+};
+
 // ============ 상세 (주문서 표시) ============
 function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggleItemStatus, onUpdateField }) {
   const [zoomPhoto, setZoomPhoto] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
   // 인라인 편집 상태: { idx, field } | null
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState('');
@@ -672,6 +682,9 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
         <button className="icon-btn" onClick={onBack}><ArrowLeft size={20} /></button>
         <div className="header-title">주문서</div>
         <div className="header-actions">
+          <button className="icon-btn" onClick={() => setInvoiceOpen(true)} title="거래명세표">
+            <Receipt size={18} />
+          </button>
           <button className="icon-btn" onClick={exportToExcel} disabled={exporting} title="엑셀 다운로드">
             <Download size={18} />
           </button>
@@ -814,7 +827,203 @@ function SheetDetail({ sheet, authMode, toast, onBack, onEdit, onDelete, onToggl
         </div>
       )}
 
+      {invoiceOpen && (
+        <InvoiceModal sheet={sheet} onClose={() => setInvoiceOpen(false)} />
+      )}
+
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+// ============ 거래명세표 모달 ============
+function InvoiceModal({ sheet, onClose }) {
+  // 작성 날짜 (오늘)
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+  const day = today.getDate();
+
+  // 선수금 (사용자 입력)
+  const [advance, setAdvance] = useState('');
+
+  // 품목 단가 추출: "300", "10,000", "₩2,500" 등에서 숫자만 추출
+  const parseNumber = (str) => {
+    if (!str) return 0;
+    const num = parseInt(String(str).replace(/[^0-9]/g, ''), 10);
+    return isNaN(num) ? 0 : num;
+  };
+
+  // 품목별 금액 계산
+  const items = (sheet.items || []).map(it => {
+    const qty = parseNumber(it.quantity);
+    const price = parseNumber(it.price);
+    return {
+      content: it.content || '',
+      quantity: qty,
+      price: price,
+      amount: qty * price,
+    };
+  });
+
+  // 합계 계산
+  const subtotal = items.reduce((sum, it) => sum + it.amount, 0);  // 공급가액 합계
+  const vat = Math.round(subtotal * 0.1);  // 부가세 10%
+  const total = subtotal + vat;  // 합계 (공급가액 + 부가세)
+  const advanceAmount = parseNumber(advance);
+  const balance = total - advanceAmount;  // 잔액
+
+  // 숫자 포맷팅 (3자리 콤마)
+  const fmt = (n) => n.toLocaleString('ko-KR');
+
+  // 사진이 있는 품목 수
+  const photoCount = (sheet.items || []).filter(it => it.photo).length;
+  const hasPhotos = photoCount > 0;
+
+  // 빈 줄 채우기 (총 10줄로 맞춤 - 품목+부가세+사진행+빈줄)
+  const photoRowCount = hasPhotos ? 1 : 0;
+  const emptyRowCount = Math.max(0, 10 - items.length - 1 - photoRowCount);
+
+  // PDF/인쇄용 - 브라우저 인쇄 활용
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="invoice-overlay" onClick={onClose}>
+      <div className="invoice-wrap" onClick={(e) => e.stopPropagation()}>
+        <div className="invoice-toolbar no-print">
+          <div className="invoice-toolbar-left">
+            <span className="invoice-toolbar-title">거래명세표</span>
+          </div>
+          <div className="invoice-toolbar-right">
+            <button className="invoice-print-btn" onClick={handlePrint}>
+              <Download size={16} /> 인쇄 / PDF 저장
+            </button>
+            <button className="invoice-close-btn" onClick={onClose}>
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        <div className="invoice-paper">
+          <h1 className="invoice-title">거래명세표</h1>
+
+          {/* 상단: 날짜 + 회사정보 */}
+          <table className="invoice-header-table">
+            <tbody>
+              <tr>
+                <td className="invoice-date-cell">
+                  <span className="date-part">{year}</span>
+                  <span className="date-sep">년</span>
+                  <span className="date-part">{month}</span>
+                  <span className="date-sep">월</span>
+                  <span className="date-part">{day}</span>
+                  <span className="date-sep">일</span>
+                </td>
+                <td className="invoice-company-cell" rowSpan={2}>
+                  <div className="company-name">{COMPANY_INFO.name}</div>
+                  <div className="company-info">{COMPANY_INFO.phone}</div>
+                  <div className="company-info">{COMPANY_INFO.address1}</div>
+                  <div className="company-info">{COMPANY_INFO.address2}</div>
+                </td>
+              </tr>
+              <tr>
+                <td className="invoice-recipient-cell">
+                  <span className="recipient-name">{sheet.client}</span>
+                  <span className="recipient-suffix">귀하</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div className="invoice-greeting">아래와 같이 계산합니다.</div>
+
+          {/* 본문: 품목 표 */}
+          <table className="invoice-body-table">
+            <thead>
+              <tr>
+                <th colSpan={3} className="th-left">합계금액 (₩)</th>
+                <th className="th-claim">청구</th>
+              </tr>
+              <tr>
+                <th className="th-item">품목</th>
+                <th className="th-qty">수량</th>
+                <th className="th-price">단가</th>
+                <th className="th-amount">금액</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, idx) => (
+                <tr key={idx}>
+                  <td className="td-item">{it.content}</td>
+                  <td className="td-num">{it.quantity > 0 ? fmt(it.quantity) : ''}</td>
+                  <td className="td-num">{it.price > 0 ? fmt(it.price) : ''}</td>
+                  <td className="td-num">{it.amount > 0 ? fmt(it.amount) : ''}</td>
+                </tr>
+              ))}
+              <tr>
+                <td className="td-item"></td>
+                <td className="td-num"></td>
+                <td className="td-num td-vat-label">부가세</td>
+                <td className="td-num">{fmt(vat)}</td>
+              </tr>
+              {/* 사진 행 - 품목 칸에 사진들 가로 나열 */}
+              {hasPhotos && (
+                <tr className="tr-photos">
+                  <td className="td-photos">
+                    <div className="invoice-photos-wrap">
+                      {(sheet.items || []).filter(it => it.photo).map((it, idx) => (
+                        <div key={idx} className="invoice-photo-cell">
+                          <img src={it.photo} alt={it.content || `품목 ${idx + 1}`} />
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                  <td colSpan={3} className="td-photos-empty"></td>
+                </tr>
+              )}
+              {Array.from({ length: emptyRowCount }).map((_, idx) => (
+                <tr key={`empty-${idx}`}>
+                  <td className="td-item">&nbsp;</td>
+                  <td className="td-num"></td>
+                  <td className="td-num"></td>
+                  <td className="td-num"></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="tr-total">
+                <td colSpan={3} className="td-total-label">합계금액</td>
+                <td className="td-num td-total-amount">{fmt(total)}</td>
+              </tr>
+              <tr className="tr-advance">
+                <td colSpan={3} className="td-advance-label">
+                  선수금 (주문 발수시 입금후 작업진행입니다)
+                </td>
+                <td className="td-num td-advance-amount">
+                  <input
+                    type="text"
+                    className="advance-input"
+                    value={advance}
+                    onChange={(e) => setAdvance(e.target.value)}
+                    placeholder="0"
+                  />
+                </td>
+              </tr>
+              <tr className="tr-balance">
+                <td colSpan={3} className="td-balance-label">잔액</td>
+                <td className="td-num td-balance-amount">{fmt(balance)}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          {/* 하단: 계좌 */}
+          <div className="invoice-footer">
+            {COMPANY_INFO.bank}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1465,14 +1674,166 @@ const styles = `
     backdrop-filter: blur(8px); }
   .zoom-close:hover { background: rgba(255,255,255,0.25); }
 
+  /* ============ 거래명세표 모달 ============ */
+  .invoice-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 200; overflow-y: auto; padding: 20px 12px;
+    display: flex; justify-content: center; align-items: flex-start;
+    animation: invoiceFadeIn 0.2s ease; }
+  @keyframes invoiceFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .invoice-wrap { width: 100%; max-width: 560px; background: #fff;
+    border-radius: 10px; overflow: hidden;
+    box-shadow: 0 20px 50px -10px rgba(0,0,0,0.3); }
+
+  .invoice-toolbar { display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; background: #1a1a1a; color: #fff; }
+  .invoice-toolbar-title { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  .invoice-toolbar-right { display: flex; gap: 8px; align-items: center; }
+  .invoice-print-btn { background: #fff; color: #1a1a1a; border: none;
+    padding: 8px 14px; border-radius: 7px; font-size: 13px; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    font-family: inherit; }
+  .invoice-print-btn:hover { opacity: 0.9; }
+  .invoice-close-btn { background: rgba(255,255,255,0.1); color: #fff; border: none;
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .invoice-close-btn:hover { background: rgba(255,255,255,0.2); }
+
+  .invoice-paper { padding: 24px 28px 28px; background: #fff;
+    font-family: '맑은 고딕', 'Malgun Gothic', sans-serif; color: #1a1a1a; }
+
+  .invoice-title { font-size: 24px; font-weight: 900; text-align: center;
+    margin: 0 0 14px; letter-spacing: 0.4em; padding: 6px 0;
+    border-top: 2.5px solid #1a1a1a; border-bottom: 2.5px solid #1a1a1a; }
+
+  .invoice-header-table { width: 100%; border-collapse: collapse;
+    border: 1.5px solid #1a1a1a; font-size: 13px; }
+  .invoice-header-table td { border: 1px solid #1a1a1a; padding: 8px 12px;
+    vertical-align: middle; }
+  .invoice-date-cell { width: 50%; text-align: center; }
+  .invoice-date-cell .date-part { font-weight: 700; font-size: 14px; margin: 0 4px; }
+  .invoice-date-cell .date-sep { color: #444; font-size: 13px; margin-right: 12px; }
+  .invoice-recipient-cell { text-align: center; }
+  .recipient-name { font-weight: 700; font-size: 15px; margin-right: 8px; }
+  .recipient-suffix { color: #555; font-size: 13px; }
+  .invoice-company-cell { width: 50%; padding: 10px 14px; }
+  .company-name { font-weight: 700; font-size: 14px; margin-bottom: 3px; }
+  .company-info { font-size: 12.5px; color: #1a1a1a; line-height: 1.5; }
+
+  .invoice-greeting { font-size: 13px; padding: 8px 4px; }
+
+  .invoice-body-table { width: 100%; border-collapse: collapse;
+    border: 1.5px solid #1a1a1a; font-size: 13px; table-layout: fixed; }
+  .invoice-body-table th, .invoice-body-table td {
+    border: 1px solid #1a1a1a; padding: 6px 8px; vertical-align: middle; }
+  .invoice-body-table thead th { background: #fafafa; font-weight: 700; text-align: center; }
+  .th-left { text-align: left !important; padding-left: 12px !important; }
+  .th-claim { width: 24%; }
+  .th-item { width: 38%; }
+  .th-qty { width: 14%; }
+  .th-price { width: 18%; }
+  .th-amount { width: 24%; }
+  .invoice-body-table tbody td { height: 24px; }
+  .td-item { padding-left: 10px !important; font-size: 12.5px; }
+  .td-num { text-align: right; padding-right: 10px !important; font-size: 12.5px;
+    font-variant-numeric: tabular-nums; }
+  .td-vat-label { text-align: left !important; padding-left: 10px !important; color: #1a1a1a; }
+
+  .tr-total td { background: #fff; font-weight: 700; padding: 10px 8px; }
+  .td-total-label { text-align: right !important; padding-right: 14px !important; font-size: 13px; }
+  .td-total-amount { font-size: 14px; font-weight: 700; }
+
+  /* 사진 행 - 품목 칸에 사진 배치 */
+  .tr-photos td { background: #fafafa; padding: 10px 8px !important; }
+  .td-photos { vertical-align: middle; }
+  .invoice-photos-wrap { display: flex; flex-wrap: wrap; gap: 6px;
+    justify-content: center; align-items: center; }
+  .invoice-photo-cell { width: 140px; height: 140px; background: #fff;
+    border: 1px solid #ddd; border-radius: 4px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; }
+  .invoice-photo-cell img { max-width: 100%; max-height: 100%;
+    width: auto; height: auto; object-fit: contain; display: block; }
+  .td-photos-empty { background: #fafafa !important; }
+
+  .tr-advance td { background: #fdf2f0; padding: 8px; }
+  .td-advance-label { text-align: left !important; padding-left: 12px !important;
+    color: #a82820; font-weight: 600; font-size: 12.5px; }
+  .td-advance-amount { padding: 4px 8px !important; }
+  .advance-input { width: 100%; border: 1px solid rgba(168,40,32,0.3);
+    background: #fff; padding: 5px 8px; border-radius: 4px;
+    font-size: 13px; text-align: right; font-family: inherit;
+    font-variant-numeric: tabular-nums; outline: none; }
+  .advance-input:focus { border-color: #a82820; }
+
+  .tr-balance td { background: #fff; padding: 10px 8px; }
+  .td-balance-label { text-align: right !important; padding-right: 14px !important;
+    font-weight: 700; font-size: 13px; }
+  .td-balance-amount { font-weight: 700; font-size: 14px; }
+
+  .invoice-footer { text-align: center; padding: 16px 0 6px;
+    border-top: 1.5px solid #1a1a1a; margin-top: -1.5px;
+    font-size: 13px; font-weight: 600; }
+
+  /* 인쇄 시 - 모달 배경/툴바 숨기고 종이만 보이게 */
+  @media print {
+    body * { visibility: hidden; }
+    .invoice-overlay, .invoice-overlay * { visibility: visible; }
+    .invoice-overlay { position: absolute; inset: 0; background: #fff; padding: 0; }
+    .invoice-wrap { box-shadow: none; max-width: 100%; border-radius: 0; }
+    .no-print { display: none !important; }
+    .invoice-paper { padding: 20px 30px; }
+    .advance-input { border: none; padding: 0; background: transparent; }
+  }
+
   @media (max-width: 768px) {
-    .items-table { overflow-x: auto; }
-    .items-header, .item-row {
-      grid-template-columns: 32px minmax(180px, 1fr) 80px 100px 90px 140px;
-      min-width: 650px;
+    /* 모바일: 표 형태 대신 세로 카드 형태로 */
+    .items-table { border: none; border-radius: 0; background: transparent; }
+    .items-header { display: none; }  /* 헤더 숨김 */
+    .item-row {
+      display: block;
+      background: #fff;
+      border: 1.5px solid #1a1a1a;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      min-height: 0;
+      padding: 0;
+      overflow: hidden;
     }
-    .item-row { min-height: 260px; }
-    .td-image { min-height: 260px; }
+    .item-row:first-of-type { border-top: 1.5px solid #1a1a1a; }
+    .td-no, .td-image, .td-info, .td-qty, .td-price, .td-notes {
+      display: block; padding: 12px 14px; border-right: none;
+      border-bottom: 1px solid #e5e5e2;
+    }
+    .td-notes { border-bottom: none; }
+    /* 번호 - 상단 헤더 스타일 */
+    .td-no {
+      background: #1a1a1a; color: #fff;
+      font-size: 13px; font-weight: 700;
+      padding: 8px 14px; text-align: left;
+    }
+    .td-no::before { content: '품목 '; opacity: 0.6; font-weight: 500; }
+    /* 이미지 - 크게 */
+    .td-image { min-height: 0; padding: 12px; }
+    .td-image img { max-height: 320px; width: auto; max-width: 100%; margin: 0 auto; }
+    /* 품목 정보 */
+    .td-info::before { content: '품목'; display: block; font-size: 11px;
+      font-weight: 700; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }
+    /* 수량 */
+    .td-qty::before { content: '수량'; display: block; font-size: 11px;
+      font-weight: 700; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .inline-display.cell-qty { min-height: 0; justify-content: flex-start; }
+    .inline-display.cell-qty .inline-value { text-align: left; }
+    /* 단가 */
+    .td-price::before { content: '단가'; display: block; font-size: 11px;
+      font-weight: 700; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .inline-display.cell-price { min-height: 0; justify-content: flex-start; }
+    .inline-display.cell-price .inline-value { text-align: left; }
+    /* 비고 */
+    .td-notes::before { content: '비고'; display: block; font-size: 11px;
+      font-weight: 700; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .inline-display.cell-notes { min-height: 0; justify-content: flex-start; }
+    .inline-display.cell-notes .inline-value { text-align: left; }
+    .notes-deadline { margin-top: 8px; }
   }
   @media (max-width: 480px) {
     .sheet-title { font-size: 22px; }
