@@ -1068,11 +1068,13 @@ function InvoiceModal({ sheet, onClose }) {
       const rect = box.getBoundingClientRect();
       const base64 = await imageToBase64(item.photo);
 
+      // 종이 기준 상대 좌표 (비율로 저장)
       photoInfos.push({
-        x: rect.left - paperRect.left,
-        y: rect.top - paperRect.top,
-        width: rect.width,
-        height: rect.height,
+        // 0~1 사이 비율
+        relX: (rect.left - paperRect.left) / paperRect.width,
+        relY: (rect.top - paperRect.top) / paperRect.height,
+        relW: rect.width / paperRect.width,
+        relH: rect.height / paperRect.height,
         base64,
       });
     }
@@ -1094,9 +1096,10 @@ function InvoiceModal({ sheet, onClose }) {
         imageTimeout: 5000,
       });
 
-      // 4) 캡처 결과에 사진들 직접 그려넣기
+      // 4) 캡처 결과에 사진들 직접 그려넣기 (캔버스 실제 크기 기준)
       const ctx = baseCanvas.getContext('2d');
-      const scale = 2;  // html2canvas scale과 동일
+      const canvasW = baseCanvas.width;
+      const canvasH = baseCanvas.height;
 
       for (const info of photoInfos) {
         if (!info.base64) continue;
@@ -1109,17 +1112,17 @@ function InvoiceModal({ sheet, onClose }) {
             im.src = info.base64;
           });
 
-          // contain 방식으로 비율 유지하며 박스에 맞추기
-          const boxW = info.width * scale;
-          const boxH = info.height * scale;
-          const boxX = info.x * scale;
-          const boxY = info.y * scale;
+          // 캔버스 좌표로 변환 (비율 × 캔버스 크기)
+          const boxX = info.relX * canvasW;
+          const boxY = info.relY * canvasH;
+          const boxW = info.relW * canvasW;
+          const boxH = info.relH * canvasH;
 
+          // contain 방식으로 비율 유지하며 박스 안에 그리기
           const photoRatio = photoImg.width / photoImg.height;
           const boxRatio = boxW / boxH;
           let drawW, drawH;
           if (photoRatio > boxRatio) {
-            // 사진이 가로가 더 김 → 가로 기준
             drawW = boxW;
             drawH = boxW / photoRatio;
           } else {
@@ -1129,6 +1132,9 @@ function InvoiceModal({ sheet, onClose }) {
           const drawX = boxX + (boxW - drawW) / 2;
           const drawY = boxY + (boxH - drawH) / 2;
 
+          // 박스 영역 흰색으로 한번 깔끔하게 지우고 사진 그리기
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(boxX, boxY, boxW, boxH);
           ctx.drawImage(photoImg, drawX, drawY, drawW, drawH);
         } catch (e) {
           console.error('사진 그려넣기 실패', e);
