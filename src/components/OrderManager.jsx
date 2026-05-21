@@ -517,7 +517,7 @@ const COMPANY_INFO = {
   phone: 'H.P : 010 4246 4452',
   address1: '서울시 중구 퇴계로 37',
   address2: '연세부자재상가 1층 115호',
-  bank: '신한은행 110-153-156742 김종운(데이)',
+  bank: '신한은행 110 153 156742 김종운(데이)',
 };
 
 // ============ 상세 (주문서 표시) ============
@@ -932,8 +932,81 @@ function InvoiceModal({ sheet, onClose }) {
   const balance = total - advanceAmount;
   const fmt = (n) => n.toLocaleString('ko-KR');
 
-  // PDF 파일명
-  const pdfFileName = `거래명세표_${sheet.client || ''}_${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}.pdf`;
+  // 파일명
+  const dateStr = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  const pdfFileName = `거래명세표_${sheet.client || ''}_${dateStr}.pdf`;
+  const imgFileName = `거래명세표_${sheet.client || ''}_${dateStr}.png`;
+
+  // 공유 - 이미지로 공유 (카톡 호환성 최고)
+  const handleShare = async () => {
+    if (selectedItems.length === 0) {
+      alert('품목을 1개 이상 선택하세요');
+      return;
+    }
+    try {
+      setGenerating(true);
+      const blob = await generateImage();
+      const file = new File([blob], imgFileName, { type: 'image/png' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: '거래명세표',
+            text: `${sheet.client} 귀하 거래명세표`,
+          });
+        } catch (shareErr) {
+          if (shareErr.name !== 'AbortError') {
+            console.error('공유 실패', shareErr);
+            downloadBlob(blob, imgFileName);
+          }
+        }
+      } else {
+        downloadBlob(blob, imgFileName);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('이미지 생성에 실패했습니다: ' + (e.message || ''));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // PDF 저장
+  const handleDownloadPDF = async () => {
+    if (selectedItems.length === 0) {
+      alert('품목을 1개 이상 선택하세요');
+      return;
+    }
+    try {
+      setGenerating(true);
+      const blob = await generatePDF();
+      downloadBlob(blob, pdfFileName);
+    } catch (e) {
+      console.error(e);
+      alert('PDF 생성에 실패했습니다: ' + (e.message || ''));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // 이미지 저장 (PNG)
+  const handleDownloadImage = async () => {
+    if (selectedItems.length === 0) {
+      alert('품목을 1개 이상 선택하세요');
+      return;
+    }
+    try {
+      setGenerating(true);
+      const blob = await generateImage();
+      downloadBlob(blob, imgFileName);
+    } catch (e) {
+      console.error(e);
+      alert('이미지 생성에 실패했습니다: ' + (e.message || ''));
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   // 이미지 URL을 base64로 변환 (CORS 우회)
   const imageToBase64 = async (url) => {
@@ -977,35 +1050,40 @@ function InvoiceModal({ sheet, onClose }) {
     }
   };
 
-  // PDF 생성 (Blob 반환)
-  const generatePDF = async () => {
-    if (!paperRef.current) throw new Error('PDF 영역을 찾을 수 없습니다');
+  // 종이 영역을 canvas로 캡처 (공통)
+  const capturePaper = async () => {
+    if (!paperRef.current) throw new Error('영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
-    const jsPDF = await loadJsPDF();
 
-    // 1) 종이 안의 모든 이미지를 base64로 변환 (CORS 문제 해결)
-    const imgs = paperRef.current.querySelectorAll('img');
-    const originalSrcs = [];
-    for (const img of imgs) {
-      originalSrcs.push(img.src);
-      if (img.src && !img.src.startsWith('data:')) {
-        const base64 = await imageToBase64(img.src);
+    // 1) 종이 안의 모든 이미지를 base64로 변환 (CORS 우회)
+    const imgs = Array.from(paperRef.current.querySelectorAll('img'));
+    const originalSrcs = imgs.map(img => img.src);
+
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      const src = originalSrcs[i];
+      if (src && !src.startsWith('data:')) {
+        const base64 = await imageToBase64(src);
         if (base64) {
-          img.src = base64;
-          // 이미지 다시 로드 대기
           await new Promise((resolve) => {
-            if (img.complete) resolve();
-            else {
-              img.onload = resolve;
-              img.onerror = resolve;
+            const onDone = () => {
+              img.onload = null;
+              img.onerror = null;
+              resolve();
+            };
+            img.onload = onDone;
+            img.onerror = onDone;
+            img.src = base64;
+            if (img.complete && img.naturalWidth > 0) {
+              setTimeout(onDone, 0);
             }
           });
         }
       }
     }
+    await new Promise(resolve => setTimeout(resolve, 300));
 
     try {
-      // 2) 종이 영역을 canvas로 변환
       const canvas = await html2canvas(paperRef.current, {
         scale: 2,
         backgroundColor: '#ffffff',
@@ -1014,37 +1092,8 @@ function InvoiceModal({ sheet, onClose }) {
         logging: false,
         imageTimeout: 15000,
       });
-
-      // 3) A4 한 페이지에 맞춰 자동 축소
-      const imgData = canvas.toDataURL('image/jpeg', 0.92);
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-      const pageWidth = pdf.internal.pageSize.getWidth();   // 210mm
-      const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
-      const margin = 10;
-      const maxWidth = pageWidth - margin * 2;   // 190mm
-      const maxHeight = pageHeight - margin * 2; // 277mm
-
-      // 캔버스 비율
-      const canvasRatio = canvas.height / canvas.width;
-      // 가로 기준으로 맞췄을 때 높이
-      let imgWidth = maxWidth;
-      let imgHeight = imgWidth * canvasRatio;
-
-      // 높이가 페이지를 넘으면, 세로 기준으로 맞춰서 축소
-      if (imgHeight > maxHeight) {
-        imgHeight = maxHeight;
-        imgWidth = imgHeight / canvasRatio;
-      }
-
-      // 가운데 정렬
-      const xOffset = (pageWidth - imgWidth) / 2;
-      const yOffset = margin;
-
-      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, imgWidth, imgHeight);
-
-      return pdf.output('blob');
+      return canvas;
     } finally {
-      // 원래 src로 복원 (블럽 URL 해제 등은 자동)
       imgs.forEach((img, i) => {
         if (originalSrcs[i] && !originalSrcs[i].startsWith('data:')) {
           img.src = originalSrcs[i];
@@ -1053,63 +1102,45 @@ function InvoiceModal({ sheet, onClose }) {
     }
   };
 
-  // 공유 (모바일: 공유 시트, PC: 다운로드)
-  const handleShare = async () => {
-    if (selectedItems.length === 0) {
-      alert('품목을 1개 이상 선택하세요');
-      return;
-    }
-    try {
-      setGenerating(true);
-      const blob = await generatePDF();
-      const file = new File([blob], pdfFileName, { type: 'application/pdf' });
-
-      // Web Share API 지원 여부 확인
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: '거래명세표',
-            text: `${sheet.client} 귀하 거래명세표`,
-          });
-        } catch (shareErr) {
-          // 사용자가 공유 취소한 경우 등 - 무시
-          if (shareErr.name !== 'AbortError') {
-            console.error('공유 실패', shareErr);
-            // 공유 실패 시 다운로드로 폴백
-            downloadBlob(blob, pdfFileName);
-          }
-        }
-      } else {
-        // 공유 API 미지원 (PC 등) - 다운로드
-        downloadBlob(blob, pdfFileName);
-      }
-    } catch (e) {
-      console.error(e);
-      alert('PDF 생성에 실패했습니다: ' + (e.message || ''));
-    } finally {
-      setGenerating(false);
-    }
+  // 이미지(PNG) 생성 - Blob 반환
+  const generateImage = async () => {
+    const canvas = await capturePaper();
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error('이미지 변환 실패')),
+        'image/png'
+      );
+    });
   };
 
-  // 다운로드 (PDF를 파일로 저장)
-  const handleDownload = async () => {
-    if (selectedItems.length === 0) {
-      alert('품목을 1개 이상 선택하세요');
-      return;
+  // PDF 생성 (Blob 반환)
+  const generatePDF = async () => {
+    const jsPDF = await loadJsPDF();
+    const canvas = await capturePaper();
+
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 10;
+    const maxWidth = pageWidth - margin * 2;
+    const maxHeight = pageHeight - margin * 2;
+
+    const canvasRatio = canvas.height / canvas.width;
+    let imgWidth = maxWidth;
+    let imgHeight = imgWidth * canvasRatio;
+    if (imgHeight > maxHeight) {
+      imgHeight = maxHeight;
+      imgWidth = imgHeight / canvasRatio;
     }
-    try {
-      setGenerating(true);
-      const blob = await generatePDF();
-      downloadBlob(blob, pdfFileName);
-    } catch (e) {
-      console.error(e);
-      alert('PDF 생성에 실패했습니다: ' + (e.message || ''));
-    } finally {
-      setGenerating(false);
-    }
+    const xOffset = (pageWidth - imgWidth) / 2;
+    const yOffset = margin;
+
+    pdf.addImage(imgData, 'JPEG', xOffset, yOffset, imgWidth, imgHeight);
+    return pdf.output('blob');
   };
 
+  // 공유/저장에 사용할 파일 다운로드 헬퍼
   const downloadBlob = (blob, filename) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1132,8 +1163,11 @@ function InvoiceModal({ sheet, onClose }) {
             <button className="invoice-share-btn" onClick={handleShare} disabled={generating || selectedItems.length === 0}>
               <Share2 size={15} /> {generating ? '생성중...' : '공유'}
             </button>
-            <button className="invoice-print-btn" onClick={handleDownload} disabled={generating || selectedItems.length === 0}>
-              <Download size={15} /> PDF 저장
+            <button className="invoice-img-btn" onClick={handleDownloadImage} disabled={generating || selectedItems.length === 0}>
+              <Download size={14} /> 이미지
+            </button>
+            <button className="invoice-print-btn" onClick={handleDownloadPDF} disabled={generating || selectedItems.length === 0}>
+              <Download size={14} /> PDF
             </button>
             <button className="invoice-close-btn" onClick={onClose}>
               <X size={20} />
@@ -1245,7 +1279,7 @@ function InvoiceModal({ sheet, onClose }) {
                         <tr className="tr-item-photo">
                           <td className="td-item-photo">
                             <div className="invoice-photo-box">
-                              <img src={it.photo} alt={it.content} crossOrigin="anonymous" />
+                              <img src={it.photo} alt={it.content} />
                             </div>
                           </td>
                           <td colSpan={3} className="td-photo-empty"></td>
@@ -1960,14 +1994,20 @@ const styles = `
   .invoice-toolbar-title { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
   .invoice-toolbar-right { display: flex; gap: 8px; align-items: center; }
   .invoice-print-btn { background: #fff; color: #1a1a1a; border: none;
-    padding: 8px 14px; border-radius: 7px; font-size: 13px; font-weight: 600;
-    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    padding: 7px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; gap: 4px;
     font-family: inherit; }
   .invoice-print-btn:hover { opacity: 0.9; }
   .invoice-print-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .invoice-img-btn { background: rgba(255,255,255,0.18); color: #fff; border: 1px solid rgba(255,255,255,0.3);
+    padding: 7px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; gap: 4px;
+    font-family: inherit; }
+  .invoice-img-btn:hover { background: rgba(255,255,255,0.3); }
+  .invoice-img-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .invoice-share-btn { background: #f5b800; color: #1a1a1a; border: none;
-    padding: 8px 14px; border-radius: 7px; font-size: 13px; font-weight: 700;
-    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    padding: 7px 12px; border-radius: 7px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; gap: 4px;
     font-family: inherit; }
   .invoice-share-btn:hover { background: #e0a800; }
   .invoice-share-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -2076,7 +2116,7 @@ const styles = `
 
   .invoice-footer { text-align: center; padding: 16px 0 6px;
     border-top: 1.5px solid #1a1a1a; margin-top: -1.5px;
-    font-size: 13px; font-weight: 600; }
+    font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
 
   /* 인쇄 시 - 모달 배경/툴바 숨기고 종이만 보이게 */
   @media print {
