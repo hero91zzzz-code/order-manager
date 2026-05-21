@@ -483,6 +483,7 @@ function InlineField({ label, value, placeholder, editable, isEditing, draft, on
 // ============ 회사 정보 (거래명세표 고정 정보) ============
 const COMPANY_INFO = {
   name: '데이 DAY',
+  bizNo: '104-05-33661',
   phone: 'H.P : 010 4246 4452',
   address1: '서울시 중구 퇴계로 37',
   address2: '연세부자재상가 1층 115호',
@@ -844,8 +845,29 @@ function InvoiceModal({ sheet, onClose }) {
   const month = today.getMonth() + 1;
   const day = today.getDate();
 
+  // 품목 선택 상태 - 처음엔 모두 선택됨
+  const [selectedIdx, setSelectedIdx] = useState(
+    () => new Set((sheet.items || []).map((_, i) => i))
+  );
+
   // 선수금 (사용자 입력)
   const [advance, setAdvance] = useState('');
+
+  const toggleItem = (idx) => {
+    setSelectedIdx(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIdx(new Set((sheet.items || []).map((_, i) => i)));
+  };
+  const deselectAll = () => {
+    setSelectedIdx(new Set());
+  };
 
   // 품목 단가 추출: "300", "10,000", "₩2,500" 등에서 숫자만 추출
   const parseNumber = (str) => {
@@ -854,37 +876,34 @@ function InvoiceModal({ sheet, onClose }) {
     return isNaN(num) ? 0 : num;
   };
 
-  // 품목별 금액 계산
-  const items = (sheet.items || []).map(it => {
-    const qty = parseNumber(it.quantity);
-    const price = parseNumber(it.price);
-    return {
-      content: it.content || '',
-      quantity: qty,
-      price: price,
-      amount: qty * price,
-    };
-  });
+  // 선택된 품목만 - 원본 인덱스 유지
+  const selectedItems = (sheet.items || [])
+    .map((it, idx) => ({ original: it, idx }))
+    .filter(({ idx }) => selectedIdx.has(idx))
+    .map(({ original, idx }) => {
+      const qty = parseNumber(original.quantity);
+      const price = parseNumber(original.price);
+      return {
+        idx,
+        content: original.content || '',
+        quantity: qty,
+        price: price,
+        amount: qty * price,
+        photo: original.photo,
+      };
+    });
 
   // 합계 계산
-  const subtotal = items.reduce((sum, it) => sum + it.amount, 0);  // 공급가액 합계
-  const vat = Math.round(subtotal * 0.1);  // 부가세 10%
-  const total = subtotal + vat;  // 합계 (공급가액 + 부가세)
+  const subtotal = selectedItems.reduce((sum, it) => sum + it.amount, 0);
+  const vat = Math.round(subtotal * 0.1);
+  const total = subtotal + vat;
   const advanceAmount = parseNumber(advance);
-  const balance = total - advanceAmount;  // 잔액
+  const balance = total - advanceAmount;
 
-  // 숫자 포맷팅 (3자리 콤마)
+  // 숫자 포맷팅
   const fmt = (n) => n.toLocaleString('ko-KR');
 
-  // 사진이 있는 품목 수
-  const photoCount = (sheet.items || []).filter(it => it.photo).length;
-  const hasPhotos = photoCount > 0;
-
-  // 빈 줄 채우기 (총 10줄로 맞춤 - 품목+부가세+사진행+빈줄)
-  const photoRowCount = hasPhotos ? 1 : 0;
-  const emptyRowCount = Math.max(0, 10 - items.length - 1 - photoRowCount);
-
-  // PDF/인쇄용 - 브라우저 인쇄 활용
+  // PDF/인쇄
   const handlePrint = () => {
     window.print();
   };
@@ -897,12 +916,45 @@ function InvoiceModal({ sheet, onClose }) {
             <span className="invoice-toolbar-title">거래명세표</span>
           </div>
           <div className="invoice-toolbar-right">
-            <button className="invoice-print-btn" onClick={handlePrint}>
+            <button className="invoice-print-btn" onClick={handlePrint} disabled={selectedItems.length === 0}>
               <Download size={16} /> 인쇄 / PDF 저장
             </button>
             <button className="invoice-close-btn" onClick={onClose}>
               <X size={20} />
             </button>
+          </div>
+        </div>
+
+        {/* 품목 선택 영역 */}
+        <div className="invoice-picker no-print">
+          <div className="invoice-picker-header">
+            <span className="invoice-picker-title">
+              명세표에 포함할 품목 ({selectedIdx.size}/{(sheet.items || []).length})
+            </span>
+            <div className="invoice-picker-actions">
+              <button className="picker-action-btn" onClick={selectAll}>전체 선택</button>
+              <button className="picker-action-btn" onClick={deselectAll}>전체 해제</button>
+            </div>
+          </div>
+          <div className="invoice-picker-list">
+            {(sheet.items || []).map((it, idx) => (
+              <label key={idx} className={`picker-item ${selectedIdx.has(idx) ? 'selected' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={selectedIdx.has(idx)}
+                  onChange={() => toggleItem(idx)}
+                />
+                <span className="picker-item-text">
+                  <span className="picker-item-name">{it.content || `(품목 ${idx + 1})`}</span>
+                  {(it.quantity || it.price) && (
+                    <span className="picker-item-meta">
+                      {it.quantity ? ` · 수량 ${it.quantity}` : ''}
+                      {it.price ? ` · 단가 ${it.price}` : ''}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
           </div>
         </div>
 
@@ -922,7 +974,10 @@ function InvoiceModal({ sheet, onClose }) {
                   <span className="date-sep">일</span>
                 </td>
                 <td className="invoice-company-cell" rowSpan={2}>
-                  <div className="company-name">{COMPANY_INFO.name}</div>
+                  <div className="company-name">
+                    {COMPANY_INFO.name}
+                    <span className="company-bizno"> ({COMPANY_INFO.bizNo})</span>
+                  </div>
                   <div className="company-info">{COMPANY_INFO.phone}</div>
                   <div className="company-info">{COMPANY_INFO.address1}</div>
                   <div className="company-info">{COMPANY_INFO.address2}</div>
@@ -954,43 +1009,42 @@ function InvoiceModal({ sheet, onClose }) {
               </tr>
             </thead>
             <tbody>
-              {items.map((it, idx) => (
-                <tr key={idx}>
-                  <td className="td-item">{it.content}</td>
-                  <td className="td-num">{it.quantity > 0 ? fmt(it.quantity) : ''}</td>
-                  <td className="td-num">{it.price > 0 ? fmt(it.price) : ''}</td>
-                  <td className="td-num">{it.amount > 0 ? fmt(it.amount) : ''}</td>
-                </tr>
-              ))}
-              <tr>
-                <td className="td-item"></td>
-                <td className="td-num"></td>
-                <td className="td-num td-vat-label">부가세</td>
-                <td className="td-num">{fmt(vat)}</td>
-              </tr>
-              {/* 사진 행 - 품목 칸에 사진들 가로 나열 */}
-              {hasPhotos && (
-                <tr className="tr-photos">
-                  <td className="td-photos">
-                    <div className="invoice-photos-wrap">
-                      {(sheet.items || []).filter(it => it.photo).map((it, idx) => (
-                        <div key={idx} className="invoice-photo-cell">
-                          <img src={it.photo} alt={it.content || `품목 ${idx + 1}`} />
-                        </div>
-                      ))}
-                    </div>
+              {selectedItems.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="td-empty-msg">
+                    위에서 품목을 선택해주세요
                   </td>
-                  <td colSpan={3} className="td-photos-empty"></td>
                 </tr>
+              ) : (
+                <>
+                  {selectedItems.map((it) => (
+                    <React.Fragment key={it.idx}>
+                      <tr>
+                        <td className="td-item">{it.content}</td>
+                        <td className="td-num">{it.quantity > 0 ? fmt(it.quantity) : ''}</td>
+                        <td className="td-num">{it.price > 0 ? fmt(it.price) : ''}</td>
+                        <td className="td-num">{it.amount > 0 ? fmt(it.amount) : ''}</td>
+                      </tr>
+                      {it.photo && (
+                        <tr className="tr-item-photo">
+                          <td className="td-item-photo">
+                            <div className="invoice-photo-box">
+                              <img src={it.photo} alt={it.content} />
+                            </div>
+                          </td>
+                          <td colSpan={3} className="td-photo-empty"></td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                  <tr>
+                    <td className="td-item"></td>
+                    <td className="td-num"></td>
+                    <td className="td-num td-vat-label">부가세</td>
+                    <td className="td-num">{fmt(vat)}</td>
+                  </tr>
+                </>
               )}
-              {Array.from({ length: emptyRowCount }).map((_, idx) => (
-                <tr key={`empty-${idx}`}>
-                  <td className="td-item">&nbsp;</td>
-                  <td className="td-num"></td>
-                  <td className="td-num"></td>
-                  <td className="td-num"></td>
-                </tr>
-              ))}
             </tbody>
             <tfoot>
               <tr className="tr-total">
@@ -1718,6 +1772,7 @@ const styles = `
   .recipient-suffix { color: #555; font-size: 13px; }
   .invoice-company-cell { width: 50%; padding: 10px 14px; }
   .company-name { font-weight: 700; font-size: 14px; margin-bottom: 3px; }
+  .company-bizno { font-weight: 400; font-size: 11.5px; color: #555; }
   .company-info { font-size: 12.5px; color: #1a1a1a; line-height: 1.5; }
 
   .invoice-greeting { font-size: 13px; padding: 8px 4px; }
@@ -1743,17 +1798,43 @@ const styles = `
   .td-total-label { text-align: right !important; padding-right: 14px !important; font-size: 13px; }
   .td-total-amount { font-size: 14px; font-weight: 700; }
 
-  /* 사진 행 - 품목 칸에 사진 배치 */
-  .tr-photos td { background: #fafafa; padding: 10px 8px !important; }
-  .td-photos { vertical-align: middle; }
-  .invoice-photos-wrap { display: flex; flex-wrap: wrap; gap: 6px;
-    justify-content: center; align-items: center; }
-  .invoice-photo-cell { width: 140px; height: 140px; background: #fff;
-    border: 1px solid #ddd; border-radius: 4px; overflow: hidden;
-    display: flex; align-items: center; justify-content: center; }
-  .invoice-photo-cell img { max-width: 100%; max-height: 100%;
-    width: auto; height: auto; object-fit: contain; display: block; }
-  .td-photos-empty { background: #fafafa !important; }
+  /* 사진 행 - 품목 바로 아래 사진 */
+  .tr-item-photo td { background: #fafafa; padding: 8px !important;
+    border-top: 1px solid #ddd !important; }
+  .td-item-photo { text-align: center; vertical-align: middle; }
+  .invoice-photo-box { display: inline-block; width: 140px; height: 140px;
+    background: #fff; border: 1px solid #ddd; border-radius: 4px;
+    overflow: hidden; }
+  .invoice-photo-box img { width: 100%; height: 100%;
+    object-fit: contain; display: block; }
+  .td-photo-empty { background: #fafafa !important; }
+
+  .td-empty-msg { text-align: center !important; padding: 30px 8px !important;
+    color: #999; font-size: 13px; }
+
+  /* 품목 선택 영역 */
+  .invoice-picker { background: #fff; padding: 14px 16px;
+    border-bottom: 1px solid #eee; }
+  .invoice-picker-header { display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 10px; }
+  .invoice-picker-title { font-size: 13px; font-weight: 600; color: #555; }
+  .invoice-picker-actions { display: flex; gap: 6px; }
+  .picker-action-btn { background: transparent; border: 1px solid rgba(0,0,0,0.1);
+    color: #666; padding: 4px 10px; border-radius: 6px; font-size: 11.5px;
+    cursor: pointer; font-family: inherit; }
+  .picker-action-btn:hover { background: #f5f4ee; color: #1a1a1a; }
+  .invoice-picker-list { display: flex; flex-direction: column; gap: 4px;
+    max-height: 200px; overflow-y: auto; }
+  .picker-item { display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px; border-radius: 7px; cursor: pointer;
+    background: #fafafa; transition: background 0.15s; opacity: 0.55; }
+  .picker-item.selected { opacity: 1; background: #f0ebd8; }
+  .picker-item:hover { background: #f0ebd8; opacity: 1; }
+  .picker-item input[type="checkbox"] { width: 16px; height: 16px;
+    cursor: pointer; flex-shrink: 0; accent-color: #1a1a1a; }
+  .picker-item-text { font-size: 13px; flex: 1; min-width: 0; }
+  .picker-item-name { font-weight: 600; color: #1a1a1a; }
+  .picker-item-meta { color: #777; font-size: 12px; }
 
   .tr-advance td { background: #fdf2f0; padding: 8px; }
   .td-advance-label { text-align: left !important; padding-left: 12px !important;
