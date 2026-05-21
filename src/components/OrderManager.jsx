@@ -1050,54 +1050,97 @@ function InvoiceModal({ sheet, onClose }) {
     }
   };
 
-  // 종이 영역을 canvas로 캡처 (공통)
+  // 종이 영역을 canvas로 캡처 + 사진 별도 그려넣기 (폰 호환성)
   const capturePaper = async () => {
     if (!paperRef.current) throw new Error('영역을 찾을 수 없습니다');
     const html2canvas = await loadHtml2Canvas();
 
-    // 1) 종이 안의 모든 이미지를 base64로 변환 (CORS 우회)
-    const imgs = Array.from(paperRef.current.querySelectorAll('img'));
-    const originalSrcs = imgs.map(img => img.src);
+    // 1) 사진 박스들의 위치 + 이미지 정보 수집 (캡처 전)
+    const photoBoxes = Array.from(paperRef.current.querySelectorAll('.invoice-photo-box'));
+    const paperRect = paperRef.current.getBoundingClientRect();
+    const photoInfos = [];
 
-    for (let i = 0; i < imgs.length; i++) {
-      const img = imgs[i];
-      const src = originalSrcs[i];
-      if (src && !src.startsWith('data:')) {
-        const base64 = await imageToBase64(src);
-        if (base64) {
-          await new Promise((resolve) => {
-            const onDone = () => {
-              img.onload = null;
-              img.onerror = null;
-              resolve();
-            };
-            img.onload = onDone;
-            img.onerror = onDone;
-            img.src = base64;
-            if (img.complete && img.naturalWidth > 0) {
-              setTimeout(onDone, 0);
-            }
-          });
-        }
-      }
+    for (const box of photoBoxes) {
+      const idx = parseInt(box.dataset.itemIdx || '-1', 10);
+      const item = selectedItems.find(it => it.idx === idx);
+      if (!item || !item.photo) continue;
+
+      const rect = box.getBoundingClientRect();
+      const base64 = await imageToBase64(item.photo);
+
+      photoInfos.push({
+        x: rect.left - paperRect.left,
+        y: rect.top - paperRect.top,
+        width: rect.width,
+        height: rect.height,
+        base64,
+      });
     }
-    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // 2) 사진들을 임시로 숨김 (캡처에서 빠지게)
+    photoBoxes.forEach(box => {
+      const img = box.querySelector('img');
+      if (img) img.style.visibility = 'hidden';
+    });
 
     try {
-      const canvas = await html2canvas(paperRef.current, {
+      // 3) 종이 캡처 (사진 없이)
+      const baseCanvas = await html2canvas(paperRef.current, {
         scale: 2,
         backgroundColor: '#ffffff',
         useCORS: true,
         allowTaint: true,
         logging: false,
-        imageTimeout: 15000,
+        imageTimeout: 5000,
       });
-      return canvas;
-    } finally {
-      imgs.forEach((img, i) => {
-        if (originalSrcs[i] && !originalSrcs[i].startsWith('data:')) {
-          img.src = originalSrcs[i];
+
+      // 4) 캡처 결과에 사진들 직접 그려넣기
+      const ctx = baseCanvas.getContext('2d');
+      const scale = 2;  // html2canvas scale과 동일
+
+      for (const info of photoInfos) {
+        if (!info.base64) continue;
+        try {
+          // 이미지 로드
+          const photoImg = await new Promise((resolve, reject) => {
+            const im = new Image();
+            im.onload = () => resolve(im);
+            im.onerror = reject;
+            im.src = info.base64;
+          });
+
+          // contain 방식으로 비율 유지하며 박스에 맞추기
+          const boxW = info.width * scale;
+          const boxH = info.height * scale;
+          const boxX = info.x * scale;
+          const boxY = info.y * scale;
+
+          const photoRatio = photoImg.width / photoImg.height;
+          const boxRatio = boxW / boxH;
+          let drawW, drawH;
+          if (photoRatio > boxRatio) {
+            // 사진이 가로가 더 김 → 가로 기준
+            drawW = boxW;
+            drawH = boxW / photoRatio;
+          } else {
+            drawH = boxH;
+            drawW = boxH * photoRatio;
+          }
+          const drawX = boxX + (boxW - drawW) / 2;
+          const drawY = boxY + (boxH - drawH) / 2;
+
+          ctx.drawImage(photoImg, drawX, drawY, drawW, drawH);
+        } catch (e) {
+          console.error('사진 그려넣기 실패', e);
         }
+      }
+
+      return baseCanvas;
+    } finally {
+      // 사진 표시 복구
+      photoBoxes.forEach(box => {
+        const img = box.querySelector('img');
+        if (img) img.style.visibility = '';
       });
     }
   };
@@ -1224,10 +1267,8 @@ function InvoiceModal({ sheet, onClose }) {
                   <span className="date-sep">일</span>
                 </td>
                 <td className="invoice-company-cell" rowSpan={2}>
-                  <div className="company-name">
-                    {COMPANY_INFO.name}
-                    <span className="company-bizno"> ({COMPANY_INFO.bizNo})</span>
-                  </div>
+                  <div className="company-name">{COMPANY_INFO.name}</div>
+                  <div className="company-bizno">({COMPANY_INFO.bizNo})</div>
                   <div className="company-info">{COMPANY_INFO.phone}</div>
                   <div className="company-info">{COMPANY_INFO.address1}</div>
                   <div className="company-info">{COMPANY_INFO.address2}</div>
@@ -1278,7 +1319,7 @@ function InvoiceModal({ sheet, onClose }) {
                       {it.photo && (
                         <tr className="tr-item-photo">
                           <td className="td-item-photo">
-                            <div className="invoice-photo-box">
+                            <div className="invoice-photo-box" data-item-idx={it.idx}>
                               <img src={it.photo} alt={it.content} />
                             </div>
                           </td>
@@ -2027,15 +2068,16 @@ const styles = `
     border: 1.5px solid #1a1a1a; font-size: 13px; }
   .invoice-header-table td { border: 1px solid #1a1a1a; padding: 8px 12px;
     vertical-align: middle; }
-  .invoice-date-cell { width: 50%; text-align: center; }
-  .invoice-date-cell .date-part { font-weight: 700; font-size: 14px; margin: 0 4px; }
-  .invoice-date-cell .date-sep { color: #444; font-size: 13px; margin-right: 12px; }
+  .invoice-date-cell { width: 50%; text-align: center; white-space: nowrap; }
+  .invoice-date-cell .date-part { font-weight: 700; font-size: 13.5px; margin: 0 3px; }
+  .invoice-date-cell .date-sep { color: #444; font-size: 12.5px; margin-right: 8px; }
   .invoice-recipient-cell { text-align: center; }
   .recipient-name { font-weight: 700; font-size: 15px; margin-right: 8px; }
   .recipient-suffix { color: #555; font-size: 13px; }
   .invoice-company-cell { width: 50%; padding: 10px 14px; }
-  .company-name { font-weight: 700; font-size: 14px; margin-bottom: 3px; }
-  .company-bizno { font-weight: 400; font-size: 11.5px; color: #555; }
+  .company-name { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
+  .company-bizno { font-weight: 400; font-size: 11.5px; color: #555;
+    margin-bottom: 3px; }
   .company-info { font-size: 12.5px; color: #1a1a1a; line-height: 1.5; }
 
   .invoice-greeting { font-size: 13px; padding: 8px 4px; }
